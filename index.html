@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agenda</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="favicon-16.png" />
+    <link rel="apple-touch-icon" sizes="180x180" href="favicon.png" />
+    <link rel="stylesheet" href="styles.css" />
+    <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <h1 class="brand">
+          <img src="logo-pgr.png" alt="PGR" class="brand-logo" />
+          <span>Agenda</span>
+        </h1>
+        <div id="authStatus" class="auth-status">Não Conectado</div>
+        <button id="newEventBtn" class="primary-btn">+ Novo evento</button>
+
+        <section class="sidebar-block">
+          <h2>Mini calendário</h2>
+          <div id="miniCalendar" class="mini-calendar"></div>
+        </section>
+
+        <section class="sidebar-block">
+          <h2>Filtros</h2>
+          <label class="toggle-line">
+            <input type="checkbox" id="showReminders" checked />
+            Mostrar lembretes automáticos
+          </label>
+        </section>
+
+        <section class="sidebar-block">
+          <h2>Conta e compartilhamento</h2>
+          <div class="stack-buttons">
+            <button id="openAuthBtn" class="ghost-btn">Entrar / cadastrar</button>
+            <button id="shareBtn" class="ghost-btn">Compartilhar agenda</button>
+            <button id="logoutBtn" class="danger-btn hidden">Sair</button>
+          </div>
+        </section>
+      </aside>
+
+      <main class="main-content">
+        <header class="toolbar">
+          <div class="toolbar-left">
+            <button id="todayBtn" class="ghost-btn">Hoje</button>
+            <button id="prevBtn" class="icon-btn" aria-label="Anterior">&#10094;</button>
+            <button id="nextBtn" class="icon-btn" aria-label="Próximo">&#10095;</button>
+            <h2 id="currentLabel"></h2>
+          </div>
+
+          <div class="toolbar-right">
+            <div class="search-wrap">
+              <input
+                id="searchInput"
+                type="text"
+                placeholder="Pesquisar empresa ou evento..."
+                aria-label="Pesquisar empresa ou evento"
+              />
+              <button id="searchBtn" class="search-btn" type="button" aria-label="Pesquisar">
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M10.5 3a7.5 7.5 0 0 1 5.96 12.04l4.25 4.25a1 1 0 0 1-1.41 1.41l-4.25-4.25A7.5 7.5 0 1 1 10.5 3Zm0 2a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11Z"
+                  ></path>
+                </svg>
+              </button>
+            </div>
+            <select id="viewSelect" aria-label="Selecionar visualização">
+              <option value="month">Mês</option>
+              <option value="week">Semana</option>
+            </select>
+            <button id="darkModeBtn" class="ghost-btn" aria-label="Ativar modo escuro" title="Ativar modo escuro">
+            </button>
+            <button id="exportPdfBtn" class="ghost-btn">Exportar PDF</button>
+          </div>
+        </header>
+
+        <section id="calendarGrid" class="calendar-grid"></section>
+      </main>
+    </div>
+
+    <dialog id="eventDialog" class="event-dialog">
+      <form id="eventForm">
+        <h3 id="dialogTitle">Novo evento</h3>
+        <label>
+          Organização
+          <input id="titleInput" type="text" required maxlength="80" />
+        </label>
+        <label>
+          CNPJ
+          <input id="cnpjInput" type="text" maxlength="18" />
+        </label>
+        <label>
+          Endereço
+          <input id="addressInput" type="text" maxlength="120" />
+        </label>
+        <label>
+          Nome Contato
+          <input id="contactNameInput" type="text" maxlength="80" />
+        </label>
+        <label>
+          Contato Telefônico
+          <input id="contactPhoneInput" type="text" maxlength="20" />
+        </label>
+        <label>
+          Contato Email
+          <input id="contactEmailInput" type="email" maxlength="120" />
+        </label>
+        <label>
+          Data de Início
+          <input id="startDateInput" type="date" required />
+        </label>
+        <label>
+          Data de Fim
+          <input id="endDateInput" type="date" required />
+        </label>
+        <label>
+          Horário de Início
+          <input id="startInput" type="time" required />
+        </label>
+        <label>
+          Horário de Fim
+          <input id="endInput" type="time" required />
+        </label>
+        <label>
+          Repetir
+          <select id="repeatInput">
+            <option value="none">Não repetir</option>
+            <option value="daily">Todos os dias</option>
+            <option value="weekly">Toda semana</option>
+            <option value="monthly">Todo mês</option>
+          </select>
+        </label>
+        <label>
+          Status
+          <select id="statusInput">
+            <option value="pendente">Pendente</option>
+            <option value="atrasado">Em atraso</option>
+            <option value="concluido">Concluido</option>
+            <option value="entrega_tecnica_finalizada">Entrega tecnica finalizada</option>
+          </select>
+        </label>
+        <label>
+          Lembrete
+          <textarea id="descriptionInput" maxlength="180" placeholder=""></textarea>
+        </label>
+
+        <menu class="dialog-actions">
+          <button id="deleteBtn" type="button" class="danger-btn hidden">Excluir</button>
+          <button type="button" id="cancelBtn" class="ghost-btn">Cancelar</button>
+          <button type="submit" class="primary-btn">Salvar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="authDialog" class="event-dialog">
+      <form id="authForm" method="dialog">
+        <h3>Acesso</h3>
+        <label>
+          E-mail
+          <input id="authEmail" type="email" placeholder="voce@email.com" />
+        </label>
+        <label>
+          Nome de usuario
+          <input id="authUsername" type="text" minlength="3" required />
+        </label>
+        <label>
+          Senha
+          <div class="password-wrap">
+            <input id="authPassword" type="password" minlength="4" required />
+            <button id="toggleAuthPasswordBtn" class="eye-btn" type="button" aria-label="Mostrar senha">
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 5c4.8 0 8.6 2.9 10 7-1.4 4.1-5.2 7-10 7s-8.6-2.9-10-7c1.4-4.1 5.2-7 10-7Zm0 2c-3.6 0-6.6 2-8 5 1.4 3 4.4 5 8 5s6.6-2 8-5c-1.4-3-4.4-5-8-5Zm0 2.3a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4Z"
+                ></path>
+              </svg>
+            </button>
+          </div>
+        </label>
+        <menu class="dialog-actions">
+          <button id="cancelAuthBtn" type="button" class="ghost-btn">Cancelar</button>
+          <button id="loginBtn" type="submit" class="ghost-btn" data-auth-action="login">Entrar</button>
+          <button id="registerBtn" type="submit" class="primary-btn" data-auth-action="register">
+            Cadastrar
+          </button>
+        </menu>
+        <button id="toggleResetBtn" type="button" class="ghost-btn compact-btn">Recuperar senha</button>
+        <section id="resetSection" class="hidden">
+          <hr class="dialog-separator" />
+          <h4 class="sub-form-title">Esqueci minha senha</h4>
+          <label>
+            E-mail da conta
+            <input id="resetEmail" type="email" placeholder="voce@email.com" />
+          </label>
+          <label>
+            Codigo recebido
+            <input id="resetCode" type="text" placeholder="123456" />
+          </label>
+          <label>
+            Nova senha
+            <div class="password-wrap">
+              <input id="resetNewPassword" type="password" minlength="4" />
+              <button
+                id="toggleResetPasswordBtn"
+                class="eye-btn"
+                type="button"
+                aria-label="Mostrar nova senha"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    d="M12 5c4.8 0 8.6 2.9 10 7-1.4 4.1-5.2 7-10 7s-8.6-2.9-10-7c1.4-4.1 5.2-7 10-7Zm0 2c-3.6 0-6.6 2-8 5 1.4 3 4.4 5 8 5s6.6-2 8-5c-1.4-3-4.4-5-8-5Zm0 2.3a2.7 2.7 0 1 1 0 5.4 2.7 2.7 0 0 1 0-5.4Z"
+                  ></path>
+                </svg>
+              </button>
+            </div>
+          </label>
+          <menu class="dialog-actions">
+            <button id="requestResetBtn" type="button" class="ghost-btn">Enviar codigo</button>
+            <button id="confirmResetBtn" type="button" class="primary-btn">Redefinir senha</button>
+          </menu>
+        </section>
+      </form>
+    </dialog>
+
+    <dialog id="shareDialog" class="event-dialog">
+      <form id="shareForm" method="dialog">
+        <h3>Compartilhar agenda</h3>
+        <label>
+          Usuario com acesso
+          <input id="shareUsername" type="text" minlength="3" required />
+        </label>
+        <p class="helper-text">
+          O usuario informado podera visualizar e editar os mesmos eventos desta agenda.
+        </p>
+        <menu class="dialog-actions">
+          <button id="cancelShareBtn" type="button" class="ghost-btn">Cancelar</button>
+          <button type="submit" class="primary-btn">Compartilhar</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="reminderDialog" class="event-dialog reminder-dialog">
+      <form id="reminderForm" method="dialog">
+        <h3>Lembrete</h3>
+        <p id="reminderText" class="reminder-text"></p>
+        <menu class="dialog-actions">
+          <button id="closeReminderBtn" type="button" class="primary-btn">Entendi</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <script src="app.js"></script>
+  </body>
+</html>

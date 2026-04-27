@@ -13,6 +13,10 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "agenda-fluxo-secret";
 const DATABASE_URL = process.env.DATABASE_URL || "";
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "db.json");
+const IS_SERVERLESS =
+  process.env.VERCEL === "1" ||
+  process.env.AWS_LAMBDA_FUNCTION_NAME ||
+  process.env.NETLIFY === "true";
 const USE_POSTGRES = Boolean(DATABASE_URL);
 const DEFAULT_DB = { users: [], calendars: [], events: [], passwordResets: [], reminderLogs: [] };
 const pool = USE_POSTGRES
@@ -35,11 +39,15 @@ app.use(express.json({ limit: "2mb" }));
 app.use(express.static(__dirname));
 app.get("/health", (_req, res) => res.status(200).json({ ok: true }));
 const appReady = ensureDb().then(() => {
-  startReminderScheduler();
+  startReminderScheduler(!IS_SERVERLESS);
 });
 app.use(async (_req, _res, next) => {
-  await appReady;
-  next();
+  try {
+    await appReady;
+    next();
+  } catch (error) {
+    next(error);
+  }
 });
 
 async function ensureDb() {
@@ -424,16 +432,18 @@ app.post("/api/ics/import", authMiddleware, (req, res) => {
   res.json({ imported: imported.length });
 });
 
-appReady
-  .then(() => {
-    app.listen(PORT, () => {
-      console.log(`Agenda Fluxo rodando em http://localhost:${PORT}`);
+if (require.main === module) {
+  appReady
+    .then(() => {
+      app.listen(PORT, () => {
+        console.log(`Agenda Fluxo rodando em http://localhost:${PORT}`);
+      });
+    })
+    .catch((error) => {
+      console.error("Falha ao iniciar aplicacao:", error);
+      process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error("Falha ao iniciar aplicacao:", error);
-    process.exit(1);
-  });
+}
 
 function normalizeStatus(value) {
   const status = String(value || "pendente")
@@ -505,7 +515,7 @@ function parseDateParts(dateText) {
   return { year, month, day };
 }
 
-function startReminderScheduler() {
+function startReminderScheduler(enableInterval = true) {
   const run = () => {
     const db = readDb();
     const now = new Date();
@@ -541,7 +551,9 @@ function startReminderScheduler() {
   };
 
   run();
-  setInterval(run, 60 * 1000);
+  if (enableInterval) {
+    setInterval(run, 60 * 1000);
+  }
 }
 
 function escapeIcs(text) {
@@ -641,3 +653,5 @@ async function sendResetCodeEmail(email, code) {
   });
   return true;
 }
+
+module.exports = app;

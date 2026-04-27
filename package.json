@@ -18,6 +18,7 @@
     "jsonwebtoken": "^9.0.3",
     "nodemailer": "^8.0.5",
     "pg": "^8.20.0",
+    "serverless-http": "^4.0.0",
     "uuid": "^14.0.0"
   }
 }

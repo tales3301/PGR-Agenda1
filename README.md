@@ -57,3 +57,19 @@ Agenda web inspirada em apps modernos de calendario, com identidade visual propr
 - O projeto agora suporta PostgreSQL via `DATABASE_URL` (recomendado para producao).
 - Sem `DATABASE_URL`, ele continua funcionando com arquivo local (`data/db.json`) para uso local.
 - Em deploy, prefira PostgreSQL para evitar perda de dados em reinicios.
+
+## Publicar na Vercel
+
+1. Importe o repositorio na Vercel.
+2. Defina as variaveis de ambiente:
+   - `JWT_SECRET`
+   - `DATABASE_URL` (opcional, mas recomendado para persistencia)
+3. Deploy padrao (o arquivo `vercel.json` ja roteia `/api/*` para o backend).
+
+## Publicar na Netlify
+
+1. Importe o repositorio na Netlify.
+2. Defina as variaveis de ambiente:
+   - `JWT_SECRET`
+   - `DATABASE_URL` (opcional, mas recomendado para persistencia)
+3. Deploy padrao (o arquivo `netlify.toml` ja roteia `/api/*` para a Function).

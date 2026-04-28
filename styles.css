@@ -56,10 +56,9 @@ body {
 }
 
 .brand-logo {
-  height: 24px;
+  height: 30px;
   width: auto;
-  max-width: none;
-  aspect-ratio: 827 / 302;
+  max-height: 30px;
   object-fit: contain;
   display: block;
   flex: 0 0 auto;
@@ -557,7 +556,7 @@ body.dark .mini-day.active {
 }
 
 .hidden {
-  display: none;
+  display: none !important;
 }
 
 .stack-buttons {

@@ -46,7 +46,8 @@
         <section class="sidebar-block">
           <h2>Conta e compartilhamento</h2>
           <div class="stack-buttons">
-            <button id="openAuthBtn" class="ghost-btn">Entrar / cadastrar</button>
+            <button id="openLoginBtn" class="ghost-btn">Entrar</button>
+            <button id="openRegisterBtn" class="primary-btn">Cadastrar</button>
             <button id="shareBtn" class="ghost-btn">Compartilhar agenda</button>
             <button id="logoutBtn" class="danger-btn hidden">Sair</button>
           </div>
@@ -168,13 +169,13 @@
 
     <dialog id="authDialog" class="event-dialog">
       <form id="authForm" method="dialog">
-        <h3>Acesso</h3>
-        <label>
+        <h3 id="authDialogTitle">Acesso</h3>
+        <label id="authEmailLabel">
           E-mail
-          <input id="authEmail" type="email" placeholder="voce@email.com" />
+          <input id="authEmail" type="email" placeholder="voce@email.com" required />
         </label>
-        <label>
-          Nome de usuario
+        <label id="authUsernameLabel">
+          Nome de Cadastro
           <input id="authUsername" type="text" minlength="3" required />
         </label>
         <label>
@@ -189,6 +190,10 @@
               </svg>
             </button>
           </div>
+        </label>
+        <label id="authConfirmPasswordLabel" class="hidden">
+          Confirmar senha
+          <input id="authConfirmPassword" type="password" minlength="4" />
         </label>
         <menu class="dialog-actions">
           <button id="cancelAuthBtn" type="button" class="ghost-btn">Cancelar</button>
@@ -239,11 +244,11 @@
       <form id="shareForm" method="dialog">
         <h3>Compartilhar agenda</h3>
         <label>
-          Usuario com acesso
-          <input id="shareUsername" type="text" minlength="3" required />
+          E-mail do destinatário
+          <input id="shareEmail" type="email" placeholder="destinatario@email.com" required />
         </label>
         <p class="helper-text">
-          O usuario informado podera visualizar e editar os mesmos eventos desta agenda.
+          O e-mail informado recebera acesso para visualizar e editar os mesmos eventos desta agenda.
         </p>
         <menu class="dialog-actions">
           <button id="cancelShareBtn" type="button" class="ghost-btn">Cancelar</button>

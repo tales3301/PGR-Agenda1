@@ -1,7 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
 const { Pool } = require("pg");
 const bcrypt = require("bcryptjs");
 const jwt = require("jsonwebtoken");
@@ -11,20 +9,16 @@ const { v4: uuidv4 } = require("uuid");
 const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || "agenda-fluxo-secret";
-const DATABASE_URL = process.env.DATABASE_URL || "";
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "data", "db.json");
+const DATABASE_URL = String(process.env.DATABASE_URL || "").trim();
 const IS_SERVERLESS =
   process.env.VERCEL === "1" ||
   process.env.AWS_LAMBDA_FUNCTION_NAME ||
   process.env.NETLIFY === "true";
-const USE_POSTGRES = Boolean(DATABASE_URL);
 const DEFAULT_DB = { users: [], calendars: [], events: [], passwordResets: [], reminderLogs: [] };
-const pool = USE_POSTGRES
-  ? new Pool({
-      connectionString: DATABASE_URL,
-      ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
-    })
-  : null;
+const pool = new Pool({
+  connectionString: DATABASE_URL,
+  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+});
 let memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
 let persistQueue = Promise.resolve();
 const STATUS_COLORS = {
@@ -51,35 +45,24 @@ app.use(async (_req, _res, next) => {
 });
 
 async function ensureDb() {
-  if (USE_POSTGRES) {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS app_state (
-        id INTEGER PRIMARY KEY,
-        data JSONB NOT NULL
-      )
-    `);
-    const result = await pool.query("SELECT data FROM app_state WHERE id = 1");
-    if (!result.rows.length) {
-      await pool.query("INSERT INTO app_state (id, data) VALUES (1, $1::jsonb)", [JSON.stringify(DEFAULT_DB)]);
-      memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
-    } else {
-      memoryDb = normalizeDb(result.rows[0].data || {});
-      await persistState();
-    }
-    console.log("Banco: PostgreSQL");
-    return;
+  if (!DATABASE_URL) {
+    throw new Error("DATABASE_URL nao configurada. Configure PostgreSQL para iniciar a aplicacao.");
   }
-
-  const dataDir = path.dirname(DB_PATH);
-  if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true });
-  if (!fs.existsSync(DB_PATH)) {
-    fs.writeFileSync(DB_PATH, JSON.stringify(DEFAULT_DB, null, 2), "utf-8");
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS app_state (
+      id INTEGER PRIMARY KEY,
+      data JSONB NOT NULL
+    )
+  `);
+  const result = await pool.query("SELECT data FROM app_state WHERE id = 1");
+  if (!result.rows.length) {
+    await pool.query("INSERT INTO app_state (id, data) VALUES (1, $1::jsonb)", [JSON.stringify(DEFAULT_DB)]);
     memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
   } else {
-    memoryDb = normalizeDb(JSON.parse(fs.readFileSync(DB_PATH, "utf-8")));
-    fs.writeFileSync(DB_PATH, JSON.stringify(memoryDb, null, 2), "utf-8");
+    memoryDb = normalizeDb(result.rows[0].data || {});
+    await persistState();
   }
-  console.log("Banco: arquivo local JSON");
+  console.log("Banco: PostgreSQL");
 }
 
 function readDb() {
@@ -88,17 +71,12 @@ function readDb() {
 
 function writeDb(db) {
   memoryDb = normalizeDb(db);
-  if (USE_POSTGRES) {
-    persistQueue = persistQueue
-      .then(() => persistState())
-      .catch((error) => console.error("Erro ao persistir no PostgreSQL:", error));
-    return;
-  }
-  fs.writeFileSync(DB_PATH, JSON.stringify(memoryDb, null, 2), "utf-8");
+  persistQueue = persistQueue
+    .then(() => persistState())
+    .catch((error) => console.error("Erro ao persistir no PostgreSQL:", error));
 }
 
 async function persistState() {
-  if (!USE_POSTGRES) return;
   await pool.query(
     `
       INSERT INTO app_state (id, data)
@@ -246,10 +224,13 @@ app.post("/api/auth/reset-password", async (req, res) => {
 });
 
 app.post("/api/auth/login", async (req, res) => {
-  const { username, password } = req.body || {};
-  if (!username || !password) return res.status(400).json({ message: "Dados invalidos." });
+  const email = String(req.body?.email || "")
+    .trim()
+    .toLowerCase();
+  const password = String(req.body?.password || "");
+  if (!email || !password) return res.status(400).json({ message: "Dados invalidos." });
   const db = readDb();
-  const user = db.users.find((u) => u.username.toLowerCase() === username.toLowerCase());
+  const user = db.users.find((u) => typeof u.email === "string" && u.email.toLowerCase() === email);
   if (!user) return res.status(401).json({ message: "Credenciais invalidas." });
   const valid = await bcrypt.compare(password, user.passwordHash);
   if (!valid) return res.status(401).json({ message: "Credenciais invalidas." });
@@ -366,14 +347,16 @@ app.delete("/api/events/:id", authMiddleware, (req, res) => {
 });
 
 app.post("/api/share", authMiddleware, (req, res) => {
-  const { targetUsername } = req.body || {};
-  if (!targetUsername) return res.status(400).json({ message: "Usuario alvo invalido." });
+  const targetEmail = String(req.body?.targetEmail || "")
+    .trim()
+    .toLowerCase();
+  if (!targetEmail) return res.status(400).json({ message: "E-mail alvo invalido." });
   const db = readDb();
 
   const ownerCalendar = db.calendars.find((cal) => cal.ownerId === req.user.userId);
   if (!ownerCalendar) return res.status(404).json({ message: "Agenda nao encontrada." });
-  const targetUser = db.users.find((u) => u.username.toLowerCase() === targetUsername.toLowerCase());
-  if (!targetUser) return res.status(404).json({ message: "Usuario nao encontrado." });
+  const targetUser = db.users.find((u) => typeof u.email === "string" && u.email.toLowerCase() === targetEmail);
+  if (!targetUser) return res.status(404).json({ message: "E-mail nao encontrado." });
   if (targetUser.id === req.user.userId) return res.status(400).json({ message: "Nao pode compartilhar com voce mesmo." });
 
   ownerCalendar.sharedWith = ownerCalendar.sharedWith || [];

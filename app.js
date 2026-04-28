@@ -18,6 +18,7 @@ const state = {
   token: null,
   user: null,
   overdueSyncInProgress: false,
+  authIntent: "login",
 };
 let pdfLogoAssetPromise = null;
 
@@ -34,7 +35,8 @@ const refs = {
   newEventBtn: document.getElementById("newEventBtn"),
   showReminders: document.getElementById("showReminders"),
   authStatus: document.getElementById("authStatus"),
-  openAuthBtn: document.getElementById("openAuthBtn"),
+  openLoginBtn: document.getElementById("openLoginBtn"),
+  openRegisterBtn: document.getElementById("openRegisterBtn"),
   logoutBtn: document.getElementById("logoutBtn"),
   shareBtn: document.getElementById("shareBtn"),
   darkModeBtn: document.getElementById("darkModeBtn"),
@@ -58,10 +60,15 @@ const refs = {
   deleteBtn: document.getElementById("deleteBtn"),
   cancelBtn: document.getElementById("cancelBtn"),
   authDialog: document.getElementById("authDialog"),
+  authDialogTitle: document.getElementById("authDialogTitle"),
   authForm: document.getElementById("authForm"),
+  authEmailLabel: document.getElementById("authEmailLabel"),
+  authUsernameLabel: document.getElementById("authUsernameLabel"),
+  authConfirmPasswordLabel: document.getElementById("authConfirmPasswordLabel"),
   authEmail: document.getElementById("authEmail"),
   authUsername: document.getElementById("authUsername"),
   authPassword: document.getElementById("authPassword"),
+  authConfirmPassword: document.getElementById("authConfirmPassword"),
   toggleAuthPasswordBtn: document.getElementById("toggleAuthPasswordBtn"),
   loginBtn: document.getElementById("loginBtn"),
   registerBtn: document.getElementById("registerBtn"),
@@ -76,7 +83,7 @@ const refs = {
   confirmResetBtn: document.getElementById("confirmResetBtn"),
   shareDialog: document.getElementById("shareDialog"),
   shareForm: document.getElementById("shareForm"),
-  shareUsername: document.getElementById("shareUsername"),
+  shareEmail: document.getElementById("shareEmail"),
   cancelShareBtn: document.getElementById("cancelShareBtn"),
   reminderDialog: document.getElementById("reminderDialog"),
   reminderText: document.getElementById("reminderText"),
@@ -142,11 +149,8 @@ function bindUI() {
   refs.eventForm.addEventListener("submit", onSubmitEvent);
   refs.deleteBtn.addEventListener("click", onDeleteEvent);
   refs.showReminders.addEventListener("change", startReminderLoop);
-  refs.openAuthBtn.addEventListener("click", () => {
-    refs.resetSection.classList.add("hidden");
-    refs.toggleResetBtn.textContent = "Recuperar senha";
-    refs.authDialog.showModal();
-  });
+  refs.openLoginBtn.addEventListener("click", () => openAuthDialog("login"));
+  refs.openRegisterBtn.addEventListener("click", () => openAuthDialog("register"));
   refs.cancelAuthBtn.addEventListener("click", () => refs.authDialog.close());
   refs.authForm.addEventListener("submit", onAuthSubmit);
   refs.toggleAuthPasswordBtn.addEventListener("click", () =>
@@ -727,30 +731,41 @@ function updateAuthStatus() {
   if (state.user) {
     refs.authStatus.textContent = `Conectado como: ${state.user.username}`;
     refs.logoutBtn.classList.remove("hidden");
-    refs.openAuthBtn.classList.add("hidden");
+    refs.openLoginBtn.classList.add("hidden");
+    refs.openRegisterBtn.classList.add("hidden");
   } else {
     refs.authStatus.textContent = "Não Conectado";
     refs.logoutBtn.classList.add("hidden");
-    refs.openAuthBtn.classList.remove("hidden");
+    refs.openLoginBtn.classList.remove("hidden");
+    refs.openRegisterBtn.classList.remove("hidden");
   }
 }
 
 function requireAuth() {
   if (state.token) return true;
-  refs.authDialog.showModal();
+  openAuthDialog("login");
   return false;
 }
 
 async function onAuthSubmit(event) {
   event.preventDefault();
-  const action = event.submitter?.dataset.authAction || "login";
+  const action = event.submitter?.dataset.authAction || state.authIntent || "login";
   const endpoint = action === "register" ? "/auth/register" : "/auth/login";
   const email = refs.authEmail.value.trim();
   const username = refs.authUsername.value.trim();
   const password = refs.authPassword.value;
+  const confirmPassword = refs.authConfirmPassword.value;
 
   if (action === "register" && !email) {
     alert("Informe o e-mail para cadastro.");
+    return;
+  }
+  if (action === "register" && !username) {
+    alert("Informe o nome de cadastro.");
+    return;
+  }
+  if (action === "register" && password !== confirmPassword) {
+    alert("A confirmacao de senha nao confere.");
     return;
   }
 
@@ -759,7 +774,7 @@ async function onAuthSubmit(event) {
       method: "POST",
       body: {
         email,
-        username,
+        username: action === "register" ? username : undefined,
         password,
       },
       noAuth: true,
@@ -774,6 +789,24 @@ async function onAuthSubmit(event) {
   } catch (error) {
     alert(error.message);
   }
+}
+
+function openAuthDialog(intent = "login") {
+  const isRegister = intent === "register";
+  state.authIntent = isRegister ? "register" : "login";
+  refs.authDialogTitle.textContent = isRegister ? "Cadastrar" : "Entrar";
+  refs.loginBtn.classList.toggle("hidden", isRegister);
+  refs.registerBtn.classList.toggle("hidden", !isRegister);
+  refs.authUsernameLabel.classList.toggle("hidden", !isRegister);
+  refs.authConfirmPasswordLabel.classList.toggle("hidden", !isRegister);
+  refs.authEmailLabel.classList.remove("hidden");
+  refs.authEmail.required = true;
+  refs.authUsername.required = isRegister;
+  refs.authConfirmPassword.required = isRegister;
+  if (!isRegister) refs.authConfirmPassword.value = "";
+  refs.resetSection.classList.add("hidden");
+  refs.toggleResetBtn.textContent = "Recuperar senha";
+  refs.authDialog.showModal();
 }
 
 async function onRequestPasswordReset() {
@@ -839,7 +872,7 @@ async function onShareSubmit(event) {
   try {
     await api("/share", {
       method: "POST",
-      body: { targetUsername: refs.shareUsername.value.trim() },
+      body: { targetEmail: refs.shareEmail.value.trim() },
     });
     refs.shareDialog.close();
     alert("Agenda compartilhada com sucesso.");
@@ -1051,10 +1084,14 @@ function getDescriptionText(event) {
 
 function exportMonthPdf(doc) {
   const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
   const startX = 8;
   const startY = 42;
-  const colWidth = 40;
-  const rowHeight = 40;
+  const contentWidth = pageWidth - startX * 2;
+  const contentHeight = pageHeight - startY - 6;
+  const colWidth = contentWidth / 7;
+  const rowHeight = contentHeight / 6;
   const monthStart = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth(), 1);
   const monthEnd = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 0);
   const renderStart = new Date(monthStart);

@@ -31,6 +31,7 @@ const refs = {
   nextBtn: document.getElementById("nextBtn"),
   todayBtn: document.getElementById("todayBtn"),
   searchInput: document.getElementById("searchInput"),
+  responsibleFilter: document.getElementById("responsibleFilter"),
   searchBtn: document.getElementById("searchBtn"),
   newEventBtn: document.getElementById("newEventBtn"),
   showReminders: document.getElementById("showReminders"),
@@ -47,9 +48,11 @@ const refs = {
   titleInput: document.getElementById("titleInput"),
   cnpjInput: document.getElementById("cnpjInput"),
   addressInput: document.getElementById("addressInput"),
+  locationInput: document.getElementById("locationInput"),
   contactNameInput: document.getElementById("contactNameInput"),
   contactPhoneInput: document.getElementById("contactPhoneInput"),
   contactEmailInput: document.getElementById("contactEmailInput"),
+  responsibleInput: document.getElementById("responsibleInput"),
   startDateInput: document.getElementById("startDateInput"),
   endDateInput: document.getElementById("endDateInput"),
   startInput: document.getElementById("startInput"),
@@ -57,6 +60,7 @@ const refs = {
   repeatInput: document.getElementById("repeatInput"),
   statusInput: document.getElementById("statusInput"),
   descriptionInput: document.getElementById("descriptionInput"),
+  confirmDoneBtn: document.getElementById("confirmDoneBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   cancelBtn: document.getElementById("cancelBtn"),
   authDialog: document.getElementById("authDialog"),
@@ -84,6 +88,7 @@ const refs = {
   shareDialog: document.getElementById("shareDialog"),
   shareForm: document.getElementById("shareForm"),
   shareEmail: document.getElementById("shareEmail"),
+  shareWhatsappBtn: document.getElementById("shareWhatsappBtn"),
   cancelShareBtn: document.getElementById("cancelShareBtn"),
   reminderDialog: document.getElementById("reminderDialog"),
   reminderText: document.getElementById("reminderText"),
@@ -127,6 +132,9 @@ function bindUI() {
   refs.searchInput.addEventListener("input", () => {
     renderCalendar();
   });
+  refs.responsibleFilter.addEventListener("change", () => {
+    renderCalendar();
+  });
   refs.searchBtn.addEventListener("click", () => {
     renderCalendar();
   });
@@ -147,6 +155,7 @@ function bindUI() {
   });
 
   refs.eventForm.addEventListener("submit", onSubmitEvent);
+  refs.confirmDoneBtn.addEventListener("click", onConfirmDone);
   refs.deleteBtn.addEventListener("click", onDeleteEvent);
   refs.showReminders.addEventListener("change", startReminderLoop);
   refs.openLoginBtn.addEventListener("click", () => openAuthDialog("login"));
@@ -169,6 +178,7 @@ function bindUI() {
   refs.shareBtn.addEventListener("click", onOpenShare);
   refs.shareForm.addEventListener("submit", onShareSubmit);
   refs.cancelShareBtn.addEventListener("click", () => refs.shareDialog.close());
+  refs.shareWhatsappBtn.addEventListener("click", onShareWhatsapp);
   refs.closeReminderBtn.addEventListener("click", () => refs.reminderDialog.close());
   refs.darkModeBtn.addEventListener("click", toggleDarkMode);
   refs.exportPdfBtn.addEventListener("click", exportPdf);
@@ -186,6 +196,7 @@ function shiftDate(direction) {
 }
 
 function renderAll() {
+  populateResponsibleFilter();
   renderLabel();
   renderMiniCalendar();
   renderCalendar();
@@ -383,7 +394,7 @@ function renderWeekView() {
       });
       const events = getEventsForDate(slotDate)
         .filter(matchesSearch)
-        .filter((event) => Number(event.start.slice(0, 2)) === hour);
+        .filter((event) => eventOverlapsSlot(event, slotDate, hour));
       events.forEach((event) => {
         slot.appendChild(createEventPill(event));
       });
@@ -404,7 +415,7 @@ function createEventPill(event) {
   title.textContent = event.title;
   const time = document.createElement("span");
   time.className = "event-time";
-  time.textContent = `${event.start} - ${event.end}`;
+  time.textContent = formatEventTimeRange(event);
   btn.appendChild(title);
   btn.appendChild(time);
   const descriptionText = getDescriptionText(event);
@@ -432,14 +443,20 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   state.editingId = event ? event.id : null;
   refs.dialogTitle.textContent = event ? "Editar evento" : "Novo evento";
   refs.deleteBtn.classList.toggle("hidden", !event);
+  refs.confirmDoneBtn.classList.toggle(
+    "hidden",
+    !event || ["concluido", "entrega_tecnica_finalizada"].includes(normalizeStatus(event.status, event.color)),
+  );
 
   const dateSeed = seedDateOverride || (seedDate ? toISODate(seedDate) : toISODate(state.currentDate));
   refs.titleInput.value = event ? event.title : "";
   refs.cnpjInput.value = event ? String(event.cnpj || "") : "";
   refs.addressInput.value = event ? String(event.address || "") : "";
+  refs.locationInput.value = event ? String(event.location || "") : "";
   refs.contactNameInput.value = event ? String(event.contactName || "") : "";
   refs.contactPhoneInput.value = event ? String(event.contactPhone || "") : "";
   refs.contactEmailInput.value = event ? String(event.contactEmail || "") : "";
+  refs.responsibleInput.value = event ? String(event.responsible || "") : "";
   refs.startDateInput.value = event ? event.date : dateSeed;
   refs.endDateInput.value = event ? String(event.endDate || event.date || dateSeed) : dateSeed;
   refs.startInput.value = event ? event.start : seedStart;
@@ -451,6 +468,41 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   refs.eventDialog.showModal();
 }
 
+function getEventEndDateTime(payload) {
+  const endDay = String(payload.endDate || payload.date || "").slice(0, 10);
+  const endTime = String(payload.end || "00:00");
+  return new Date(`${endDay}T${endTime}:00`);
+}
+
+async function onConfirmDone() {
+  if (!state.editingId) return;
+  const current = state.events.find((item) => item.id === state.editingId);
+  if (!current) return;
+
+  const now = new Date();
+  const endAt = getEventEndDateTime(current);
+  const onTime = !Number.isNaN(endAt.getTime()) ? now <= endAt : true;
+
+  try {
+    await api(`/events/${current.id}`, {
+      method: "PUT",
+      body: {
+        ...current,
+        status: "concluido",
+        color: STATUS_COLORS.concluido,
+        completedAt: now.toISOString(),
+        completedOnTime: onTime,
+      },
+    });
+    refs.eventDialog.close();
+    await loadEventsFromApi();
+    renderAll();
+    alert(onTime ? "Tarefa confirmada como realizada dentro do prazo." : "Tarefa confirmada, mas fora do prazo.");
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
 async function onSubmitEvent(event) {
   event.preventDefault();
   const descriptionText = refs.descriptionInput.value.trim();
@@ -460,9 +512,11 @@ async function onSubmitEvent(event) {
     title: refs.titleInput.value.trim(),
     cnpj: refs.cnpjInput.value.trim(),
     address: refs.addressInput.value.trim(),
+    location: refs.locationInput.value.trim(),
     contactName: refs.contactNameInput.value.trim(),
     contactPhone: refs.contactPhoneInput.value.trim(),
     contactEmail: refs.contactEmailInput.value.trim(),
+    responsible: refs.responsibleInput.value.trim(),
     date: refs.startDateInput.value,
     endDate: refs.endDateInput.value,
     start: refs.startInput.value,
@@ -518,17 +572,89 @@ async function onDeleteEvent() {
   }
 }
 
+function populateResponsibleFilter() {
+  const sel = refs.responsibleFilter;
+  if (!sel) return;
+  const previous = sel.value;
+  const names = [
+    ...new Set(state.events.map((e) => String(e.responsible || "").trim()).filter(Boolean)),
+  ].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  sel.innerHTML = "";
+  const allOpt = document.createElement("option");
+  allOpt.value = "";
+  allOpt.textContent = "Todos os responsáveis";
+  sel.appendChild(allOpt);
+  names.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    opt.textContent = name;
+    sel.appendChild(opt);
+  });
+  if (previous && names.includes(previous)) {
+    sel.value = previous;
+  }
+}
+
+function formatEventTimeRange(event) {
+  const startD = String(event.date || "").slice(0, 10);
+  const endD = String(event.endDate || event.date || startD).slice(0, 10);
+  const startT = String(event.start || "09:00");
+  const endT = String(event.end || "10:00");
+  if (startD === endD) return `${startT} - ${endT}`;
+  const fmtDay = (iso) => {
+    const [y, mo, d] = iso.split("-").map(Number);
+    return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "2-digit" }).format(
+      new Date(y, mo - 1, d),
+    );
+  };
+  return `${fmtDay(startD)} ${startT} — ${fmtDay(endD)} ${endT}`;
+}
+
+/** Whether the calendar hour row [hour, hour+1) overlaps the event on this local date. */
+function eventOverlapsSlot(event, slotDate, hour) {
+  const slotIso = toISODate(slotDate);
+  const startIso = String(event.date || "").slice(0, 10);
+  const endIso = String(event.endDate || event.date || startIso).slice(0, 10);
+  if (slotIso < startIso || slotIso > endIso) return false;
+  const startParts = String(event.start || "00:00").split(":");
+  const endParts = String(event.end || "00:00").split(":");
+  const sh = Number(startParts[0]) || 0;
+  const sm = Number(startParts[1]) || 0;
+  const eh = Number(endParts[0]) || 0;
+  const em = Number(endParts[1]) || 0;
+  const startMin = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+  const slotStart = hour * 60;
+  const slotEnd = (hour + 1) * 60;
+  if (startIso === endIso) {
+    if (endMin <= startMin) return false;
+    return endMin > slotStart && startMin < slotEnd;
+  }
+  if (slotIso === startIso) {
+    return 24 * 60 > slotStart && startMin < slotEnd;
+  }
+  if (slotIso === endIso) {
+    return endMin > slotStart && 0 < slotEnd;
+  }
+  return 24 * 60 > slotStart && 0 < slotEnd;
+}
+
 function getEventsForDate(dateObj) {
   return state.events.filter((event) => occursOnDate(event, dateObj)).sort(byStartTime);
 }
 
 function occursOnDate(event, dateObj) {
+  const targetIso = toISODate(dateObj);
+  const startIso = String(event.date || "").slice(0, 10);
+  const endIso = String(event.endDate || event.date || startIso).slice(0, 10);
   const baseDate = fromISODate(event.date);
   const target = new Date(dateObj.getFullYear(), dateObj.getMonth(), dateObj.getDate());
   if (event.instance) {
     return sameDay(baseDate, target);
   }
-  if (event.repeat === "none" || !event.repeat) return sameDay(baseDate, target);
+  if (event.repeat === "none" || !event.repeat) {
+    return targetIso >= startIso && targetIso <= endIso;
+  }
   if (target < baseDate) return false;
   if (event.repeat === "daily") return true;
   if (event.repeat === "weekly") return baseDate.getDay() === target.getDay();
@@ -541,21 +667,34 @@ function byStartTime(a, b) {
 }
 
 function matchesSearch(event) {
+  const filterResp = String(refs.responsibleFilter?.value || "").trim();
+  if (filterResp && String(event.responsible || "").trim() !== filterResp) {
+    return false;
+  }
   const query = refs.searchInput.value.trim().toLowerCase();
   if (!query) return true;
   return (
     event.title.toLowerCase().includes(query) ||
+    String(event.location || "")
+      .toLowerCase()
+      .includes(query) ||
     String(event.description || event.reminderMessage || "")
       .toLowerCase()
       .includes(query) ||
     String(event.status || "")
+      .toLowerCase()
+      .includes(query) ||
+    String(event.responsible || "")
       .toLowerCase()
       .includes(query)
   );
 }
 
 function isSearching() {
-  return refs.searchInput.value.trim().length > 0;
+  return (
+    refs.searchInput.value.trim().length > 0 ||
+    String(refs.responsibleFilter?.value || "").trim().length > 0
+  );
 }
 
 function startReminderLoop() {
@@ -867,15 +1006,30 @@ function onOpenShare() {
   refs.shareDialog.showModal();
 }
 
+function onShareWhatsapp() {
+  if (!requireAuth()) return;
+  const targetEmail = refs.shareEmail.value.trim();
+  const appUrl = window.location.origin;
+  const owner = state.user?.username ? ` (${state.user.username})` : "";
+  const msg =
+    `Convite para compartilhar a agenda${owner}.\n` +
+    `Abra: ${appUrl}\n` +
+    (targetEmail ? `Use o e-mail: ${targetEmail}\n` : "") +
+    "Depois, acesse com esse e-mail para ver os eventos compartilhados.";
+
+  const url = `https://wa.me/?text=${encodeURIComponent(msg)}`;
+  window.open(url, "_blank", "noopener,noreferrer");
+}
+
 async function onShareSubmit(event) {
   event.preventDefault();
   try {
-    await api("/share", {
+    const data = await api("/share", {
       method: "POST",
       body: { targetEmail: refs.shareEmail.value.trim() },
     });
     refs.shareDialog.close();
-    alert("Agenda compartilhada com sucesso.");
+    alert(data?.message || "Convite enviado/registrado com sucesso.");
   } catch (error) {
     alert(error.message);
   }
@@ -1188,7 +1342,8 @@ function drawEventChip(doc, x, y, w, event, h = 5.5) {
   doc.setFontSize(7);
   const hasDescription = getDescriptionText(event).length > 0;
   const marker = hasDescription ? " •" : "";
-  const label = `${event.start} ${event.title}${marker}`.slice(0, 38);
+  const timeBit = formatEventTimeRange(event).replace(/\s+/g, " ");
+  const label = `${timeBit} ${event.title}${marker}`.replace(/\s+/g, " ").slice(0, 38);
   doc.text(label, x + 1.1, y + h / 2 + 1.2);
 }
 

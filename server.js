@@ -1,3 +1,5 @@
+require("dotenv").config();
+
 const express = require("express");
 const cors = require("cors");
 const { Pool } = require("pg");
@@ -15,10 +17,13 @@ const IS_SERVERLESS =
   process.env.AWS_LAMBDA_FUNCTION_NAME ||
   process.env.NETLIFY === "true";
 const DEFAULT_DB = { users: [], calendars: [], events: [], passwordResets: [], reminderLogs: [] };
-const pool = new Pool({
-  connectionString: DATABASE_URL,
-  ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
-});
+const USE_POSTGRES = Boolean(DATABASE_URL);
+const pool = USE_POSTGRES
+  ? new Pool({
+      connectionString: DATABASE_URL,
+      ssl: DATABASE_URL.includes("localhost") ? false : { rejectUnauthorized: false },
+    })
+  : null;
 let memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
 let persistQueue = Promise.resolve();
 const STATUS_COLORS = {
@@ -45,8 +50,10 @@ app.use(async (_req, _res, next) => {
 });
 
 async function ensureDb() {
-  if (!DATABASE_URL) {
-    throw new Error("DATABASE_URL nao configurada. Configure PostgreSQL para iniciar a aplicacao.");
+  if (!USE_POSTGRES) {
+    memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
+    console.warn("DATABASE_URL nao configurada. Rodando em modo local (memoria).");
+    return;
   }
   await pool.query(`
     CREATE TABLE IF NOT EXISTS app_state (
@@ -77,6 +84,7 @@ function writeDb(db) {
 }
 
 async function persistState() {
+  if (!USE_POSTGRES || !pool) return;
   await pool.query(
     `
       INSERT INTO app_state (id, data)
@@ -95,6 +103,13 @@ function normalizeDb(rawDb) {
     passwordResets: Array.isArray(rawDb.passwordResets) ? rawDb.passwordResets : [],
     reminderLogs: Array.isArray(rawDb.reminderLogs) ? rawDb.reminderLogs : [],
   };
+  db.calendars = db.calendars.map((calendar) => ({
+    ...calendar,
+    sharedWith: Array.isArray(calendar.sharedWith) ? calendar.sharedWith : [],
+    sharedWithEmails: Array.isArray(calendar.sharedWithEmails)
+      ? calendar.sharedWithEmails.map((item) => String(item || "").trim().toLowerCase()).filter(Boolean)
+      : [],
+  }));
   db.events = db.events.map((event) => {
     const status = normalizeStatusWithColor(event.status, event.color);
     const description = String(event.description || event.reminderMessage || "").trim();
@@ -104,6 +119,10 @@ function normalizeDb(rawDb) {
       color: STATUS_COLORS[status] || STATUS_COLORS.pendente,
       description,
       reminderMessage: description,
+      responsible: String(event.responsible || "").trim(),
+      completedAt: event.completedAt || null,
+      completedOnTime:
+        typeof event.completedOnTime === "boolean" ? event.completedOnTime : event.completedOnTime == null ? null : !!event.completedOnTime,
     };
   });
   return db;
@@ -126,9 +145,34 @@ function authMiddleware(req, res, next) {
 }
 
 function getOwnedAndSharedCalendarIds(db, userId) {
+  const user = db.users.find((item) => item.id === userId);
+  const userEmail = String(user?.email || "")
+    .trim()
+    .toLowerCase();
   return db.calendars
-    .filter((cal) => cal.ownerId === userId || (cal.sharedWith || []).includes(userId))
+    .filter(
+      (cal) =>
+        cal.ownerId === userId ||
+        (cal.sharedWith || []).includes(userId) ||
+        (!!userEmail && (cal.sharedWithEmails || []).includes(userEmail)),
+    )
     .map((cal) => cal.id);
+}
+
+function ensureOwnCalendar(db, userId, fallbackUsername = "Usuário") {
+  const existing = db.calendars.find((cal) => cal.ownerId === userId);
+  if (existing) return existing;
+  const user = db.users.find((u) => u.id === userId);
+  const username = String(user?.username || fallbackUsername || "Usuário").trim() || "Usuário";
+  const calendar = {
+    id: uuidv4(),
+    name: `Agenda de ${username}`,
+    ownerId: userId,
+    sharedWith: [],
+    sharedWithEmails: [],
+  };
+  db.calendars.push(calendar);
+  return calendar;
 }
 
 app.post("/api/auth/register", async (req, res) => {
@@ -155,6 +199,7 @@ app.post("/api/auth/register", async (req, res) => {
     name: `Agenda de ${user.username}`,
     ownerId: user.id,
     sharedWith: [],
+    sharedWithEmails: [],
   };
   db.calendars.push(calendar);
   writeDb(db);
@@ -282,15 +327,22 @@ app.get("/api/events", authMiddleware, (req, res) => {
 
 app.post("/api/events", authMiddleware, (req, res) => {
   const db = readDb();
-  const ownCalendar = db.calendars.find((cal) => cal.ownerId === req.user.userId);
-  if (!ownCalendar) return res.status(404).json({ message: "Agenda principal nao encontrada." });
+  const ownCalendar = ensureOwnCalendar(db, req.user.userId, req.user.username);
   const normalizedStatus = normalizeStatusWithColor(req.body.status, req.body.color);
 
   const baseEvent = {
     id: uuidv4(),
     calendarId: ownCalendar.id,
     title: req.body.title || "Sem titulo",
+    cnpj: String(req.body.cnpj || "").trim().slice(0, 18),
+    address: String(req.body.address || "").trim().slice(0, 120),
+    location: String(req.body.location || "").trim().slice(0, 120),
+    contactName: String(req.body.contactName || "").trim().slice(0, 80),
+    contactPhone: String(req.body.contactPhone || "").trim().slice(0, 20),
+    contactEmail: String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 120),
+    responsible: String(req.body.responsible || "").trim().slice(0, 80),
     date: req.body.date,
+    endDate: req.body.endDate || req.body.date,
     start: req.body.start,
     end: req.body.end,
     color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
@@ -320,7 +372,15 @@ app.put("/api/events/:id", authMiddleware, (req, res) => {
   db.events[idx] = {
     ...db.events[idx],
     title: req.body.title,
+    cnpj: String(req.body.cnpj || "").trim().slice(0, 18),
+    address: String(req.body.address || "").trim().slice(0, 120),
+    location: String(req.body.location || "").trim().slice(0, 120),
+    contactName: String(req.body.contactName || "").trim().slice(0, 80),
+    contactPhone: String(req.body.contactPhone || "").trim().slice(0, 20),
+    contactEmail: String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 120),
+    responsible: String(req.body.responsible || "").trim().slice(0, 80),
     date: req.body.date,
+    endDate: req.body.endDate || req.body.date,
     start: req.body.start,
     end: req.body.end,
     color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
@@ -330,6 +390,13 @@ app.put("/api/events/:id", authMiddleware, (req, res) => {
     description: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
     reminderMessage: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
     reminderSentAt: null,
+    completedAt: req.body.completedAt || null,
+    completedOnTime:
+      typeof req.body.completedOnTime === "boolean"
+        ? req.body.completedOnTime
+        : req.body.completedOnTime == null
+          ? null
+          : !!req.body.completedOnTime,
     recurrenceGroupId: current.recurrenceGroupId || uuidv4(),
   };
   writeDb(db);
@@ -346,7 +413,7 @@ app.delete("/api/events/:id", authMiddleware, (req, res) => {
   res.json({ ok: true });
 });
 
-app.post("/api/share", authMiddleware, (req, res) => {
+app.post("/api/share", authMiddleware, async (req, res) => {
   const targetEmail = String(req.body?.targetEmail || "")
     .trim()
     .toLowerCase();
@@ -356,15 +423,38 @@ app.post("/api/share", authMiddleware, (req, res) => {
   const ownerCalendar = db.calendars.find((cal) => cal.ownerId === req.user.userId);
   if (!ownerCalendar) return res.status(404).json({ message: "Agenda nao encontrada." });
   const targetUser = db.users.find((u) => typeof u.email === "string" && u.email.toLowerCase() === targetEmail);
-  if (!targetUser) return res.status(404).json({ message: "E-mail nao encontrado." });
-  if (targetUser.id === req.user.userId) return res.status(400).json({ message: "Nao pode compartilhar com voce mesmo." });
+  if (targetUser?.id === req.user.userId) return res.status(400).json({ message: "Nao pode compartilhar com voce mesmo." });
 
   ownerCalendar.sharedWith = ownerCalendar.sharedWith || [];
-  if (!ownerCalendar.sharedWith.includes(targetUser.id)) {
+  ownerCalendar.sharedWithEmails = ownerCalendar.sharedWithEmails || [];
+  if (targetUser && !ownerCalendar.sharedWith.includes(targetUser.id)) {
     ownerCalendar.sharedWith.push(targetUser.id);
   }
+  if (!ownerCalendar.sharedWithEmails.includes(targetEmail)) {
+    ownerCalendar.sharedWithEmails.push(targetEmail);
+  }
   writeDb(db);
-  res.json({ ok: true });
+
+  const ownerUser = db.users.find((u) => u.id === req.user.userId);
+  const ownerName = ownerUser?.username || req.user.username || "Usuário";
+  const ownerEmail = ownerUser?.email || "";
+  const sent = await sendShareInviteEmail({
+    to: targetEmail,
+    ownerName,
+    ownerEmail,
+    calendarName: ownerCalendar.name || `Agenda de ${ownerName}`,
+  });
+  res.json({
+    ok: true,
+    emailSent: sent,
+    message: sent
+      ? targetUser
+        ? "Compartilhamento realizado e convite enviado por e-mail."
+        : "Convite enviado por e-mail. Quando essa pessoa criar conta com esse e-mail, ja tera acesso."
+      : targetUser
+        ? "Compartilhamento realizado, mas SMTP nao esta configurado para envio de e-mails."
+        : "Compartilhamento registrado. Quando essa pessoa criar conta com esse e-mail, ja tera acesso. SMTP nao configurado para envio.",
+  });
 });
 
 app.get("/api/ics/export", authMiddleware, (req, res) => {
@@ -378,7 +468,8 @@ app.get("/api/ics/export", authMiddleware, (req, res) => {
     lines.push(`UID:${event.id}`);
     lines.push(`DTSTAMP:${toIcsDateTime(new Date())}`);
     lines.push(`DTSTART:${toIcsDateTime(new Date(`${event.date}T${event.start}:00`))}`);
-    lines.push(`DTEND:${toIcsDateTime(new Date(`${event.date}T${event.end}:00`))}`);
+    const endDay = String(event.endDate || event.date);
+    lines.push(`DTEND:${toIcsDateTime(new Date(`${endDay}T${event.end}:00`))}`);
     lines.push(`SUMMARY:${escapeIcs(event.title || "Sem titulo")}`);
     if (event.repeat === "daily") lines.push("RRULE:FREQ=DAILY");
     if (event.repeat === "weekly") lines.push("RRULE:FREQ=WEEKLY");
@@ -393,8 +484,7 @@ app.get("/api/ics/export", authMiddleware, (req, res) => {
 app.post("/api/ics/import", authMiddleware, (req, res) => {
   const text = req.body?.icsText || "";
   const db = readDb();
-  const ownCalendar = db.calendars.find((cal) => cal.ownerId === req.user.userId);
-  if (!ownCalendar) return res.status(404).json({ message: "Agenda principal nao encontrada." });
+  const ownCalendar = ensureOwnCalendar(db, req.user.userId, req.user.username);
   const imported = parseIcs(text);
   imported.forEach((item) => {
     db.events.push({
@@ -506,10 +596,11 @@ function startReminderScheduler(enableInterval = true) {
     for (const event of db.events) {
       if (event.status === "concluido" || event.status === "entrega_tecnica_finalizada") continue;
       const startAt = new Date(`${event.date}T${event.start}:00`);
-      const endAt = new Date(`${event.date}T${event.end}:00`);
+      const endDay = String(event.endDate || event.date);
+      const endAt = new Date(`${endDay}T${event.end}:00`);
 
       // IA simples: se passou do horario final, marca como atrasado automaticamente.
-      if (now > endAt && event.status === "pendente") {
+      if (now > endAt && event.status === "pendente" && !event.completedAt) {
         event.status = "atrasado";
         event.color = STATUS_COLORS.atrasado;
         changed = true;
@@ -627,14 +718,69 @@ async function sendResetCodeEmail(email, code) {
     auth: { user, pass },
   });
 
-  await transporter.sendMail({
-    from,
-    to: email,
-    subject: "Codigo de recuperacao - Agenda Fluxo",
-    text: `Seu codigo de recuperacao e: ${code}\n\nEle expira em 15 minutos.`,
-    html: `<p>Seu codigo de recuperacao e: <strong>${code}</strong></p><p>Ele expira em 15 minutos.</p>`,
+  try {
+    await transporter.verify();
+    const info = await transporter.sendMail({
+      from,
+      to: email,
+      subject: "Codigo de recuperacao - Agenda Fluxo",
+      text: `Seu codigo de recuperacao e: ${code}\n\nEle expira em 15 minutos.`,
+      html: `<p>Seu codigo de recuperacao e: <strong>${code}</strong></p><p>Ele expira em 15 minutos.</p>`,
+    });
+    if (Array.isArray(info?.rejected) && info.rejected.length) {
+      console.warn("SMTP rejeitou envio de reset:", { email, rejected: info.rejected });
+      return false;
+    }
+    return Array.isArray(info?.accepted) ? info.accepted.length > 0 : true;
+  } catch (error) {
+    console.error("Falha ao enviar e-mail de reset:", error);
+    return false;
+  }
+}
+
+async function sendShareInviteEmail({ to, ownerName, ownerEmail, calendarName }) {
+  const host = process.env.SMTP_HOST;
+  const port = Number(process.env.SMTP_PORT || 587);
+  const user = process.env.SMTP_USER;
+  const pass = process.env.SMTP_PASS;
+  const from = process.env.FROM_EMAIL || user;
+
+  if (!host || !user || !pass || !from) {
+    return false;
+  }
+
+  const transporter = nodemailer.createTransport({
+    host,
+    port,
+    secure: port === 465,
+    auth: { user, pass },
   });
-  return true;
+
+  const ownerLine = ownerEmail ? `${ownerName} (${ownerEmail})` : ownerName;
+  try {
+    await transporter.verify();
+    const info = await transporter.sendMail({
+      from,
+      to,
+      subject: "Convite para agenda compartilhada - Agenda Fluxo",
+      text:
+        `Voce recebeu um convite para acessar a agenda "${calendarName}".\n` +
+        `Compartilhado por: ${ownerLine}\n\n` +
+        "Acesse o sistema e entre com seu e-mail para visualizar os eventos compartilhados.",
+      html:
+        `<p>Voce recebeu um convite para acessar a agenda <strong>${calendarName}</strong>.</p>` +
+        `<p>Compartilhado por: <strong>${ownerLine}</strong></p>` +
+        "<p>Acesse o sistema e entre com seu e-mail para visualizar os eventos compartilhados.</p>",
+    });
+    if (Array.isArray(info?.rejected) && info.rejected.length) {
+      console.warn("SMTP rejeitou convite de compartilhamento:", { to, rejected: info.rejected });
+      return false;
+    }
+    return Array.isArray(info?.accepted) ? info.accepted.length > 0 : true;
+  } catch (error) {
+    console.error("Falha ao enviar convite de compartilhamento:", error);
+    return false;
+  }
 }
 
 module.exports = app;

@@ -37,6 +37,12 @@
 
         <section class="sidebar-block">
           <h2>Filtros</h2>
+          <label class="filter-label">
+            Responsável
+            <select id="responsibleFilter" aria-label="Filtrar por responsável">
+              <option value="">Todos os responsáveis</option>
+            </select>
+          </label>
           <label class="toggle-line">
             <input type="checkbox" id="showReminders" checked />
             Mostrar lembretes automáticos
@@ -68,8 +74,8 @@
               <input
                 id="searchInput"
                 type="text"
-                placeholder="Pesquisar empresa ou evento..."
-                aria-label="Pesquisar empresa ou evento"
+                placeholder="Pesquisar empresa, evento ou responsável..."
+                aria-label="Pesquisar empresa, evento ou responsável"
               />
               <button id="searchBtn" class="search-btn" type="button" aria-label="Pesquisar">
                 <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -109,6 +115,10 @@
           <input id="addressInput" type="text" maxlength="120" />
         </label>
         <label>
+          Local
+          <input id="locationInput" type="text" maxlength="120" />
+        </label>
+        <label>
           Nome Contato
           <input id="contactNameInput" type="text" maxlength="80" />
         </label>
@@ -119,6 +129,10 @@
         <label>
           Contato Email
           <input id="contactEmailInput" type="email" maxlength="120" />
+        </label>
+        <label>
+          Responsável
+          <input id="responsibleInput" type="text" maxlength="80" placeholder="Nome do responsável pela atividade" />
         </label>
         <label>
           Data de Início
@@ -160,6 +174,7 @@
         </label>
 
         <menu class="dialog-actions">
+          <button id="confirmDoneBtn" type="button" class="ghost-btn hidden">Confirmar realizado</button>
           <button id="deleteBtn" type="button" class="danger-btn hidden">Excluir</button>
           <button type="button" id="cancelBtn" class="ghost-btn">Cancelar</button>
           <button type="submit" class="primary-btn">Salvar</button>
@@ -252,7 +267,8 @@
         </p>
         <menu class="dialog-actions">
           <button id="cancelShareBtn" type="button" class="ghost-btn">Cancelar</button>
-          <button type="submit" class="primary-btn">Compartilhar</button>
+          <button id="shareWhatsappBtn" type="button" class="ghost-btn">WhatsApp</button>
+          <button type="submit" class="primary-btn">Enviar e-mail</button>
         </menu>
       </form>
     </dialog>

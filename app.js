@@ -13,7 +13,10 @@ const state = {
   currentDate: new Date(),
   currentView: "month",
   events: [],
+  companies: [],
+  users: [],
   editingId: null,
+  editingCompanyId: null,
   reminderTimer: null,
   token: null,
   user: null,
@@ -32,10 +35,14 @@ const refs = {
   todayBtn: document.getElementById("todayBtn"),
   searchInput: document.getElementById("searchInput"),
   responsibleFilter: document.getElementById("responsibleFilter"),
+  responsibleFilterList: document.getElementById("responsibleFilterList"),
+  companyFilter: document.getElementById("companyFilter"),
+  companyFilterList: document.getElementById("companyFilterList"),
   searchBtn: document.getElementById("searchBtn"),
   newEventBtn: document.getElementById("newEventBtn"),
   showReminders: document.getElementById("showReminders"),
   authStatus: document.getElementById("authStatus"),
+  manageCompaniesBtn: document.getElementById("manageCompaniesBtn"),
   openLoginBtn: document.getElementById("openLoginBtn"),
   openRegisterBtn: document.getElementById("openRegisterBtn"),
   logoutBtn: document.getElementById("logoutBtn"),
@@ -44,6 +51,7 @@ const refs = {
   exportPdfBtn: document.getElementById("exportPdfBtn"),
   eventDialog: document.getElementById("eventDialog"),
   eventForm: document.getElementById("eventForm"),
+  companySelectInput: document.getElementById("companySelectInput"),
   dialogTitle: document.getElementById("dialogTitle"),
   titleInput: document.getElementById("titleInput"),
   cnpjInput: document.getElementById("cnpjInput"),
@@ -61,6 +69,7 @@ const refs = {
   statusInput: document.getElementById("statusInput"),
   descriptionInput: document.getElementById("descriptionInput"),
   confirmDoneBtn: document.getElementById("confirmDoneBtn"),
+  saveCompanyFromEventBtn: document.getElementById("saveCompanyFromEventBtn"),
   deleteBtn: document.getElementById("deleteBtn"),
   cancelBtn: document.getElementById("cancelBtn"),
   authDialog: document.getElementById("authDialog"),
@@ -93,6 +102,19 @@ const refs = {
   reminderDialog: document.getElementById("reminderDialog"),
   reminderText: document.getElementById("reminderText"),
   closeReminderBtn: document.getElementById("closeReminderBtn"),
+  companiesDialog: document.getElementById("companiesDialog"),
+  companiesForm: document.getElementById("companiesForm"),
+  companiesList: document.getElementById("companiesList"),
+  companyNameInput: document.getElementById("companyNameInput"),
+  companyCnpjInput: document.getElementById("companyCnpjInput"),
+  companyAddressInput: document.getElementById("companyAddressInput"),
+  companyLocationInput: document.getElementById("companyLocationInput"),
+  companyContactNameInput: document.getElementById("companyContactNameInput"),
+  companyContactPhoneInput: document.getElementById("companyContactPhoneInput"),
+  companyContactEmailInput: document.getElementById("companyContactEmailInput"),
+  companyResponsibleInput: document.getElementById("companyResponsibleInput"),
+  deleteCompanyBtn: document.getElementById("deleteCompanyBtn"),
+  cancelCompanyBtn: document.getElementById("cancelCompanyBtn"),
 };
 
 init();
@@ -105,6 +127,8 @@ async function init() {
   updateAuthStatus();
   if (state.token) {
     await loadEventsFromApi();
+    await loadCompaniesFromApi();
+    await loadUsersFromApi();
   }
   renderAll();
   startReminderLoop();
@@ -132,9 +156,10 @@ function bindUI() {
   refs.searchInput.addEventListener("input", () => {
     renderCalendar();
   });
-  refs.responsibleFilter.addEventListener("change", () => {
-    renderCalendar();
-  });
+  refs.responsibleFilter.addEventListener("input", renderCalendar);
+  refs.responsibleFilter.addEventListener("change", renderCalendar);
+  refs.companyFilter.addEventListener("input", renderCalendar);
+  refs.companyFilter.addEventListener("change", renderCalendar);
   refs.searchBtn.addEventListener("click", () => {
     renderCalendar();
   });
@@ -149,13 +174,16 @@ function bindUI() {
     if (!requireAuth()) return;
     openEventDialog();
   });
+  refs.manageCompaniesBtn.addEventListener("click", onOpenCompaniesDialog);
 
   refs.cancelBtn.addEventListener("click", () => {
     refs.eventDialog.close();
   });
 
   refs.eventForm.addEventListener("submit", onSubmitEvent);
+  refs.companySelectInput.addEventListener("change", onCompanySelectInEvent);
   refs.confirmDoneBtn.addEventListener("click", onConfirmDone);
+  refs.saveCompanyFromEventBtn.addEventListener("click", onSaveCompanyFromEvent);
   refs.deleteBtn.addEventListener("click", onDeleteEvent);
   refs.showReminders.addEventListener("change", startReminderLoop);
   refs.openLoginBtn.addEventListener("click", () => openAuthDialog("login"));
@@ -180,6 +208,9 @@ function bindUI() {
   refs.cancelShareBtn.addEventListener("click", () => refs.shareDialog.close());
   refs.shareWhatsappBtn.addEventListener("click", onShareWhatsapp);
   refs.closeReminderBtn.addEventListener("click", () => refs.reminderDialog.close());
+  refs.companiesForm.addEventListener("submit", onSubmitCompany);
+  refs.deleteCompanyBtn.addEventListener("click", onDeleteCompany);
+  refs.cancelCompanyBtn.addEventListener("click", () => refs.companiesDialog.close());
   refs.darkModeBtn.addEventListener("click", toggleDarkMode);
   refs.exportPdfBtn.addEventListener("click", exportPdf);
 }
@@ -197,6 +228,8 @@ function shiftDate(direction) {
 
 function renderAll() {
   populateResponsibleFilter();
+  populateCompanyFilter();
+  populateCompanySelect();
   renderLabel();
   renderMiniCalendar();
   renderCalendar();
@@ -439,6 +472,85 @@ function createEventPill(event) {
   return btn;
 }
 
+function populateCompanySelect(selectedId = "") {
+  const sel = refs.companySelectInput;
+  if (!sel) return;
+  const previous = selectedId || sel.value || "";
+  sel.innerHTML = "";
+  const defaultOpt = document.createElement("option");
+  defaultOpt.value = "";
+  defaultOpt.textContent = "Selecionar empresa (opcional)";
+  sel.appendChild(defaultOpt);
+  state.companies
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"))
+    .forEach((company) => {
+      const opt = document.createElement("option");
+      opt.value = company.id;
+      opt.textContent = company.name || "Empresa";
+      sel.appendChild(opt);
+    });
+  if (previous && state.companies.some((company) => company.id === previous)) {
+    sel.value = previous;
+  }
+}
+
+function applyCompanyToEventForm(companyId) {
+  const company = state.companies.find((item) => item.id === companyId);
+  if (!company) return;
+  refs.titleInput.value = company.name || refs.titleInput.value;
+  refs.cnpjInput.value = company.cnpj || refs.cnpjInput.value;
+  refs.addressInput.value = company.address || refs.addressInput.value;
+  refs.locationInput.value = company.location || refs.locationInput.value;
+  refs.contactNameInput.value = company.contactName || refs.contactNameInput.value;
+  refs.contactPhoneInput.value = company.contactPhone || refs.contactPhoneInput.value;
+  refs.contactEmailInput.value = company.contactEmail || refs.contactEmailInput.value;
+  refs.responsibleInput.value = company.responsible || refs.responsibleInput.value;
+}
+
+function onCompanySelectInEvent() {
+  const companyId = refs.companySelectInput.value;
+  if (!companyId) return;
+  applyCompanyToEventForm(companyId);
+}
+
+async function onSaveCompanyFromEvent() {
+  if (!requireAuth()) return;
+  const name = refs.titleInput.value.trim();
+  if (!name) {
+    alert("Preencha ao menos Organização para salvar como empresa.");
+    return;
+  }
+  const cnpj = refs.cnpjInput.value.trim();
+  const duplicate = state.companies.find(
+    (c) => String(c.name || "").trim() === name && String(c.cnpj || "").trim() === cnpj,
+  );
+  if (duplicate) {
+    populateCompanySelect(duplicate.id);
+    alert("Já existe cadastro com esse nome e CNPJ. Empresa selecionada acima.");
+    return;
+  }
+  const payload = {
+    name,
+    cnpj,
+    address: refs.addressInput.value.trim(),
+    location: refs.locationInput.value.trim(),
+    contactName: refs.contactNameInput.value.trim(),
+    contactPhone: refs.contactPhoneInput.value.trim(),
+    contactEmail: refs.contactEmailInput.value.trim(),
+    responsible: refs.responsibleInput.value.trim(),
+  };
+  try {
+    const data = await api("/companies", { method: "POST", body: payload });
+    await loadCompaniesFromApi();
+    const newId = data?.company?.id;
+    populateCompanySelect(newId || "");
+    alert("Empresa salva. Use o seletor Empresa cadastrada nos próximos eventos.");
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
 function openEventDialog(event = null, seedDate = null, seedStart = "09:00", seedDateOverride = null) {
   state.editingId = event ? event.id : null;
   refs.dialogTitle.textContent = event ? "Editar evento" : "Novo evento";
@@ -457,6 +569,14 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   refs.contactPhoneInput.value = event ? String(event.contactPhone || "") : "";
   refs.contactEmailInput.value = event ? String(event.contactEmail || "") : "";
   refs.responsibleInput.value = event ? String(event.responsible || "") : "";
+  const matchedCompany = event
+    ? state.companies.find(
+        (company) =>
+          String(company.name || "").trim() === String(event.title || "").trim() &&
+          String(company.cnpj || "").trim() === String(event.cnpj || "").trim(),
+      )
+    : null;
+  populateCompanySelect(matchedCompany?.id || "");
   refs.startDateInput.value = event ? event.date : dateSeed;
   refs.endDateInput.value = event ? String(event.endDate || event.date || dateSeed) : dateSeed;
   refs.startInput.value = event ? event.start : seedStart;
@@ -573,25 +693,42 @@ async function onDeleteEvent() {
 }
 
 function populateResponsibleFilter() {
-  const sel = refs.responsibleFilter;
-  if (!sel) return;
-  const previous = sel.value;
+  const input = refs.responsibleFilter;
+  const list = refs.responsibleFilterList;
+  if (!input || !list) return;
+  const previous = input.value;
   const names = [
-    ...new Set(state.events.map((e) => String(e.responsible || "").trim()).filter(Boolean)),
+    ...new Set(state.users.map((user) => String(user.username || "").trim()).filter(Boolean)),
   ].sort((a, b) => a.localeCompare(b, "pt-BR"));
-  sel.innerHTML = "";
-  const allOpt = document.createElement("option");
-  allOpt.value = "";
-  allOpt.textContent = "Todos os responsáveis";
-  sel.appendChild(allOpt);
+  list.innerHTML = "";
   names.forEach((name) => {
     const opt = document.createElement("option");
     opt.value = name;
-    opt.textContent = name;
-    sel.appendChild(opt);
+    list.appendChild(opt);
   });
   if (previous && names.includes(previous)) {
-    sel.value = previous;
+    input.value = previous;
+  }
+}
+
+function populateCompanyFilter() {
+  const input = refs.companyFilter;
+  const list = refs.companyFilterList;
+  if (!input || !list) return;
+  const previous = input.value;
+  const names = [
+    ...new Set(
+      state.companies.map((company) => String(company.name || "").trim()).filter(Boolean),
+    ),
+  ].sort((a, b) => a.localeCompare(b, "pt-BR"));
+  list.innerHTML = "";
+  names.forEach((name) => {
+    const opt = document.createElement("option");
+    opt.value = name;
+    list.appendChild(opt);
+  });
+  if (previous && names.includes(previous)) {
+    input.value = previous;
   }
 }
 
@@ -667,8 +804,16 @@ function byStartTime(a, b) {
 }
 
 function matchesSearch(event) {
-  const filterResp = String(refs.responsibleFilter?.value || "").trim();
-  if (filterResp && String(event.responsible || "").trim() !== filterResp) {
+  const filterResp = String(refs.responsibleFilter?.value || "")
+    .trim()
+    .toLowerCase();
+  if (filterResp && !String(event.responsible || "").trim().toLowerCase().includes(filterResp)) {
+    return false;
+  }
+  const filterCompany = String(refs.companyFilter?.value || "")
+    .trim()
+    .toLowerCase();
+  if (filterCompany && !String(event.title || "").trim().toLowerCase().includes(filterCompany)) {
     return false;
   }
   const query = refs.searchInput.value.trim().toLowerCase();
@@ -693,7 +838,8 @@ function matchesSearch(event) {
 function isSearching() {
   return (
     refs.searchInput.value.trim().length > 0 ||
-    String(refs.responsibleFilter?.value || "").trim().length > 0
+    String(refs.responsibleFilter?.value || "").trim().length > 0 ||
+    String(refs.companyFilter?.value || "").trim().length > 0
   );
 }
 
@@ -924,6 +1070,8 @@ async function onAuthSubmit(event) {
     updateAuthStatus();
     refs.authDialog.close();
     await loadEventsFromApi();
+    await loadCompaniesFromApi();
+    await loadUsersFromApi();
     renderAll();
   } catch (error) {
     alert(error.message);
@@ -996,6 +1144,8 @@ function logout() {
   state.token = null;
   state.user = null;
   state.events = [];
+  state.companies = [];
+  state.users = [];
   persistSession();
   updateAuthStatus();
   renderAll();
@@ -1004,6 +1154,111 @@ function logout() {
 function onOpenShare() {
   if (!requireAuth()) return;
   refs.shareDialog.showModal();
+}
+
+function resetCompanyForm() {
+  state.editingCompanyId = null;
+  refs.companyNameInput.value = "";
+  refs.companyCnpjInput.value = "";
+  refs.companyAddressInput.value = "";
+  refs.companyLocationInput.value = "";
+  refs.companyContactNameInput.value = "";
+  refs.companyContactPhoneInput.value = "";
+  refs.companyContactEmailInput.value = "";
+  refs.companyResponsibleInput.value = "";
+  refs.deleteCompanyBtn.classList.add("hidden");
+}
+
+function fillCompanyForm(company) {
+  state.editingCompanyId = company.id;
+  refs.companyNameInput.value = String(company.name || "");
+  refs.companyCnpjInput.value = String(company.cnpj || "");
+  refs.companyAddressInput.value = String(company.address || "");
+  refs.companyLocationInput.value = String(company.location || "");
+  refs.companyContactNameInput.value = String(company.contactName || "");
+  refs.companyContactPhoneInput.value = String(company.contactPhone || "");
+  refs.companyContactEmailInput.value = String(company.contactEmail || "");
+  refs.companyResponsibleInput.value = String(company.responsible || "");
+  refs.deleteCompanyBtn.classList.remove("hidden");
+}
+
+function renderCompaniesList() {
+  refs.companiesList.innerHTML = "";
+  if (!state.companies.length) {
+    const empty = document.createElement("small");
+    empty.textContent = "Nenhuma empresa cadastrada.";
+    refs.companiesList.appendChild(empty);
+    return;
+  }
+  state.companies
+    .slice()
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"))
+    .forEach((company) => {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "company-item-btn";
+      if (state.editingCompanyId === company.id) btn.classList.add("active");
+      btn.textContent = `${company.name}${company.cnpj ? ` (${company.cnpj})` : ""}`;
+      btn.addEventListener("click", () => {
+        fillCompanyForm(company);
+        renderCompaniesList();
+      });
+      refs.companiesList.appendChild(btn);
+    });
+}
+
+function onOpenCompaniesDialog() {
+  if (!requireAuth()) return;
+  resetCompanyForm();
+  renderCompaniesList();
+  refs.companiesDialog.showModal();
+}
+
+async function onSubmitCompany(event) {
+  event.preventDefault();
+  const payload = {
+    name: refs.companyNameInput.value.trim(),
+    cnpj: refs.companyCnpjInput.value.trim(),
+    address: refs.companyAddressInput.value.trim(),
+    location: refs.companyLocationInput.value.trim(),
+    contactName: refs.companyContactNameInput.value.trim(),
+    contactPhone: refs.companyContactPhoneInput.value.trim(),
+    contactEmail: refs.companyContactEmailInput.value.trim(),
+    responsible: refs.companyResponsibleInput.value.trim(),
+  };
+  if (!payload.name) return;
+  try {
+    if (state.editingCompanyId) {
+      await api(`/companies/${state.editingCompanyId}`, {
+        method: "PUT",
+        body: payload,
+      });
+    } else {
+      await api("/companies", {
+        method: "POST",
+        body: payload,
+      });
+    }
+    await loadCompaniesFromApi();
+    resetCompanyForm();
+    renderCompaniesList();
+    renderAll();
+  } catch (error) {
+    alert(error.message);
+  }
+}
+
+async function onDeleteCompany() {
+  if (!state.editingCompanyId) return;
+  try {
+    await api(`/companies/${state.editingCompanyId}`, { method: "DELETE" });
+    await loadCompaniesFromApi();
+    resetCompanyForm();
+    renderCompaniesList();
+    renderAll();
+  } catch (error) {
+    alert(error.message);
+  }
 }
 
 function onShareWhatsapp() {
@@ -1047,6 +1302,31 @@ async function loadEventsFromApi() {
       STATUS_COLORS.pendente,
     description: getDescriptionText(event),
     reminderMessage: getDescriptionText(event),
+  }));
+}
+
+async function loadCompaniesFromApi() {
+  if (!state.token) return;
+  const data = await api("/companies");
+  state.companies = (data.companies || []).map((company) => ({
+    ...company,
+    name: String(company.name || "").trim(),
+    cnpj: String(company.cnpj || "").trim(),
+    address: String(company.address || "").trim(),
+    location: String(company.location || "").trim(),
+    contactName: String(company.contactName || "").trim(),
+    contactPhone: String(company.contactPhone || "").trim(),
+    contactEmail: String(company.contactEmail || "").trim(),
+    responsible: String(company.responsible || "").trim(),
+  }));
+}
+
+async function loadUsersFromApi() {
+  if (!state.token) return;
+  const data = await api("/users");
+  state.users = (data.users || []).map((user) => ({
+    id: user.id,
+    username: String(user.username || "").trim(),
   }));
 }
 

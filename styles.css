@@ -97,11 +97,48 @@ body {
   font-size: 0.88rem;
 }
 
+.filter-label input {
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 0.88rem;
+}
+
 .toggle-line {
   display: flex;
   gap: 0.45rem;
   align-items: center;
   font-size: 0.9rem;
+}
+
+.companies-list {
+  margin-top: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.4rem;
+  max-height: 180px;
+  overflow: auto;
+  display: grid;
+  gap: 0.25rem;
+}
+
+.company-item-btn {
+  text-align: left;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.4rem 0.5rem;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.company-item-btn:hover,
+.company-item-btn.active {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.4);
 }
 
 .main-content {
@@ -601,6 +638,10 @@ body.dark .mini-day.active {
   color: var(--muted);
   font-size: 0.85rem;
   line-height: 1.35;
+}
+
+.event-company-save {
+  margin: 0.35rem 0 0.65rem;
 }
 
 .reminder-dialog {

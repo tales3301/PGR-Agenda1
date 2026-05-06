@@ -29,6 +29,7 @@
         </h1>
         <div id="authStatus" class="auth-status">Não Conectado</div>
         <button id="newEventBtn" class="primary-btn">+ Novo evento</button>
+        <button id="manageCompaniesBtn" class="ghost-btn">Empresas</button>
 
         <section class="sidebar-block">
           <h2>Mini calendário</h2>
@@ -39,9 +40,23 @@
           <h2>Filtros</h2>
           <label class="filter-label">
             Responsável
-            <select id="responsibleFilter" aria-label="Filtrar por responsável">
-              <option value="">Todos os responsáveis</option>
-            </select>
+            <input
+              id="responsibleFilter"
+              list="responsibleFilterList"
+              aria-label="Filtrar por responsável"
+              placeholder="Todos os responsáveis"
+            />
+            <datalist id="responsibleFilterList"></datalist>
+          </label>
+          <label class="filter-label">
+            Empresa
+            <input
+              id="companyFilter"
+              list="companyFilterList"
+              aria-label="Filtrar por empresa"
+              placeholder="Todas as empresas"
+            />
+            <datalist id="companyFilterList"></datalist>
           </label>
           <label class="toggle-line">
             <input type="checkbox" id="showReminders" checked />
@@ -103,6 +118,12 @@
       <form id="eventForm">
         <h3 id="dialogTitle">Novo evento</h3>
         <label>
+          Empresa cadastrada
+          <select id="companySelectInput">
+            <option value="">Selecionar empresa (opcional)</option>
+          </select>
+        </label>
+        <label>
           Organização
           <input id="titleInput" type="text" required maxlength="80" />
         </label>
@@ -134,6 +155,11 @@
           Responsável
           <input id="responsibleInput" type="text" maxlength="80" placeholder="Nome do responsável pela atividade" />
         </label>
+        <p class="helper-text event-company-save">
+          <button type="button" id="saveCompanyFromEventBtn" class="ghost-btn compact-btn">
+            Salvar dados como nova empresa
+          </button>
+        </p>
         <label>
           Data de Início
           <input id="startDateInput" type="date" required />
@@ -269,6 +295,50 @@
           <button id="cancelShareBtn" type="button" class="ghost-btn">Cancelar</button>
           <button id="shareWhatsappBtn" type="button" class="ghost-btn">WhatsApp</button>
           <button type="submit" class="primary-btn">Enviar e-mail</button>
+        </menu>
+      </form>
+    </dialog>
+
+    <dialog id="companiesDialog" class="event-dialog">
+      <form id="companiesForm" method="dialog">
+        <h3>Empresas cadastradas</h3>
+        <label>
+          Organização
+          <input id="companyNameInput" type="text" maxlength="80" required />
+        </label>
+        <label>
+          CNPJ
+          <input id="companyCnpjInput" type="text" maxlength="18" />
+        </label>
+        <label>
+          Endereço
+          <input id="companyAddressInput" type="text" maxlength="120" />
+        </label>
+        <label>
+          Local
+          <input id="companyLocationInput" type="text" maxlength="120" />
+        </label>
+        <label>
+          Nome Contato
+          <input id="companyContactNameInput" type="text" maxlength="80" />
+        </label>
+        <label>
+          Contato Telefônico
+          <input id="companyContactPhoneInput" type="text" maxlength="20" />
+        </label>
+        <label>
+          Contato Email
+          <input id="companyContactEmailInput" type="email" maxlength="120" />
+        </label>
+        <label>
+          Responsável padrão
+          <input id="companyResponsibleInput" type="text" maxlength="80" />
+        </label>
+        <div id="companiesList" class="companies-list"></div>
+        <menu class="dialog-actions">
+          <button id="deleteCompanyBtn" type="button" class="danger-btn hidden">Excluir empresa</button>
+          <button id="cancelCompanyBtn" type="button" class="ghost-btn">Fechar</button>
+          <button type="submit" class="primary-btn">Salvar empresa</button>
         </menu>
       </form>
     </dialog>

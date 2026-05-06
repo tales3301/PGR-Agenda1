@@ -16,7 +16,14 @@ const IS_SERVERLESS =
   process.env.VERCEL === "1" ||
   process.env.AWS_LAMBDA_FUNCTION_NAME ||
   process.env.NETLIFY === "true";
-const DEFAULT_DB = { users: [], calendars: [], events: [], passwordResets: [], reminderLogs: [] };
+const DEFAULT_DB = {
+  users: [],
+  calendars: [],
+  events: [],
+  companies: [],
+  passwordResets: [],
+  reminderLogs: [],
+};
 const USE_POSTGRES = Boolean(DATABASE_URL);
 const pool = USE_POSTGRES
   ? new Pool({
@@ -55,21 +62,27 @@ async function ensureDb() {
     console.warn("DATABASE_URL nao configurada. Rodando em modo local (memoria).");
     return;
   }
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS app_state (
-      id INTEGER PRIMARY KEY,
-      data JSONB NOT NULL
-    )
-  `);
-  const result = await pool.query("SELECT data FROM app_state WHERE id = 1");
-  if (!result.rows.length) {
-    await pool.query("INSERT INTO app_state (id, data) VALUES (1, $1::jsonb)", [JSON.stringify(DEFAULT_DB)]);
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS app_state (
+        id INTEGER PRIMARY KEY,
+        data JSONB NOT NULL
+      )
+    `);
+    const result = await pool.query("SELECT data FROM app_state WHERE id = 1");
+    if (!result.rows.length) {
+      await pool.query("INSERT INTO app_state (id, data) VALUES (1, $1::jsonb)", [JSON.stringify(DEFAULT_DB)]);
+      memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
+    } else {
+      memoryDb = normalizeDb(result.rows[0].data || {});
+      await persistState();
+    }
+    console.log("Banco: PostgreSQL");
+  } catch (error) {
     memoryDb = JSON.parse(JSON.stringify(DEFAULT_DB));
-  } else {
-    memoryDb = normalizeDb(result.rows[0].data || {});
-    await persistState();
+    console.error("Falha ao conectar no PostgreSQL. Subindo em modo memoria.", error.message || error);
+    console.warn("Revise DATABASE_URL no Render/Supabase.");
   }
-  console.log("Banco: PostgreSQL");
 }
 
 function readDb() {
@@ -100,6 +113,7 @@ function normalizeDb(rawDb) {
     users: Array.isArray(rawDb.users) ? rawDb.users : [],
     calendars: Array.isArray(rawDb.calendars) ? rawDb.calendars : [],
     events: Array.isArray(rawDb.events) ? rawDb.events : [],
+    companies: Array.isArray(rawDb.companies) ? rawDb.companies : [],
     passwordResets: Array.isArray(rawDb.passwordResets) ? rawDb.passwordResets : [],
     reminderLogs: Array.isArray(rawDb.reminderLogs) ? rawDb.reminderLogs : [],
   };
@@ -125,7 +139,37 @@ function normalizeDb(rawDb) {
         typeof event.completedOnTime === "boolean" ? event.completedOnTime : event.completedOnTime == null ? null : !!event.completedOnTime,
     };
   });
+  db.companies = db.companies.map((company) => ({
+    ...company,
+    name: String(company.name || "").trim().slice(0, 80),
+    cnpj: String(company.cnpj || "").trim().slice(0, 18),
+    address: String(company.address || "").trim().slice(0, 120),
+    location: String(company.location || "").trim().slice(0, 120),
+    contactName: String(company.contactName || "").trim().slice(0, 80),
+    contactPhone: String(company.contactPhone || "").trim().slice(0, 20),
+    contactEmail: String(company.contactEmail || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 120),
+    responsible: String(company.responsible || "").trim().slice(0, 80),
+  }));
   return db;
+}
+
+function normalizeCompanyPayload(payload = {}) {
+  return {
+    name: String(payload.name || "").trim().slice(0, 80),
+    cnpj: String(payload.cnpj || "").trim().slice(0, 18),
+    address: String(payload.address || "").trim().slice(0, 120),
+    location: String(payload.location || "").trim().slice(0, 120),
+    contactName: String(payload.contactName || "").trim().slice(0, 80),
+    contactPhone: String(payload.contactPhone || "").trim().slice(0, 20),
+    contactEmail: String(payload.contactEmail || "")
+      .trim()
+      .toLowerCase()
+      .slice(0, 120),
+    responsible: String(payload.responsible || "").trim().slice(0, 80),
+  };
 }
 
 function makeToken(user) {
@@ -287,6 +331,18 @@ app.post("/api/auth/login", async (req, res) => {
   });
 });
 
+app.get("/api/users", authMiddleware, (req, res) => {
+  const db = readDb();
+  const users = db.users
+    .map((user) => ({
+      id: user.id,
+      username: String(user.username || "").trim(),
+    }))
+    .filter((user) => user.username)
+    .sort((a, b) => a.username.localeCompare(b.username, "pt-BR"));
+  res.json({ users });
+});
+
 app.get("/api/events", authMiddleware, (req, res) => {
   const db = readDb();
   const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
@@ -409,6 +465,63 @@ app.delete("/api/events/:id", authMiddleware, (req, res) => {
   const before = db.events.length;
   db.events = db.events.filter((event) => !(event.id === req.params.id && calendarIds.includes(event.calendarId)));
   if (db.events.length === before) return res.status(404).json({ message: "Evento nao encontrado." });
+  writeDb(db);
+  res.json({ ok: true });
+});
+
+app.get("/api/companies", authMiddleware, (req, res) => {
+  const db = readDb();
+  const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
+  const companies = db.companies
+    .filter((company) => calendarIds.includes(company.calendarId))
+    .sort((a, b) => String(a.name || "").localeCompare(String(b.name || ""), "pt-BR"));
+  res.json({ companies });
+});
+
+app.post("/api/companies", authMiddleware, (req, res) => {
+  const db = readDb();
+  const ownCalendar = ensureOwnCalendar(db, req.user.userId, req.user.username);
+  const payload = normalizeCompanyPayload(req.body || {});
+  if (!payload.name) return res.status(400).json({ message: "Informe o nome da empresa." });
+  const company = {
+    id: uuidv4(),
+    calendarId: ownCalendar.id,
+    ...payload,
+    createdBy: req.user.userId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+  db.companies.push(company);
+  writeDb(db);
+  res.status(201).json({ company });
+});
+
+app.put("/api/companies/:id", authMiddleware, (req, res) => {
+  const db = readDb();
+  const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
+  const idx = db.companies.findIndex(
+    (company) => company.id === req.params.id && calendarIds.includes(company.calendarId),
+  );
+  if (idx < 0) return res.status(404).json({ message: "Empresa nao encontrada." });
+  const payload = normalizeCompanyPayload(req.body || {});
+  if (!payload.name) return res.status(400).json({ message: "Informe o nome da empresa." });
+  db.companies[idx] = {
+    ...db.companies[idx],
+    ...payload,
+    updatedAt: new Date().toISOString(),
+  };
+  writeDb(db);
+  res.json({ company: db.companies[idx] });
+});
+
+app.delete("/api/companies/:id", authMiddleware, (req, res) => {
+  const db = readDb();
+  const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
+  const before = db.companies.length;
+  db.companies = db.companies.filter(
+    (company) => !(company.id === req.params.id && calendarIds.includes(company.calendarId)),
+  );
+  if (db.companies.length === before) return res.status(404).json({ message: "Empresa nao encontrada." });
   writeDb(db);
   res.json({ ok: true });
 });

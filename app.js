@@ -8,6 +8,7 @@ const STATUS_COLORS = {
   concluido: "#22c55e",
   entrega_tecnica_finalizada: "#a855f7",
 };
+const MONTH_DAY_EVENT_VISIBLE_LIMIT = 5;
 
 const state = {
   currentDate: new Date(),
@@ -369,14 +370,21 @@ function renderMonthView() {
     dayCell.appendChild(dayNumber);
 
     const dayEvents = getEventsForDate(cursor).filter(matchesSearch);
-    const limit = isSearching() ? dayEvents.length : 4;
+    const limit = isSearching() ? dayEvents.length : MONTH_DAY_EVENT_VISIBLE_LIMIT;
     dayEvents.slice(0, limit).forEach((event) => {
       dayCell.appendChild(createEventPill(event));
     });
 
-    if (!isSearching() && dayEvents.length > 4) {
-      const more = document.createElement("small");
-      more.textContent = `+${dayEvents.length - 4} mais`;
+    if (!isSearching() && dayEvents.length > MONTH_DAY_EVENT_VISIBLE_LIMIT) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "day-more-btn";
+      more.textContent = `+${dayEvents.length - MONTH_DAY_EVENT_VISIBLE_LIMIT} mais`;
+      more.addEventListener("click", (clickEvent) => {
+        clickEvent.preventDefault();
+        clickEvent.stopPropagation();
+        showHiddenDayEvents(cursor, dayEvents.slice(MONTH_DAY_EVENT_VISIBLE_LIMIT));
+      });
       dayCell.appendChild(more);
     }
 
@@ -470,6 +478,21 @@ function createEventPill(event) {
     openEventDialog(event);
   });
   return btn;
+}
+
+function showHiddenDayEvents(dateObj, events) {
+  if (!events.length) return;
+  const dateLabel = new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  }).format(dateObj);
+  const lines = events.map((event) => {
+    const time = formatEventTimeRange(event);
+    const responsible = String(event.responsible || "").trim();
+    return `- ${time} | ${event.title}${responsible ? ` | ${responsible}` : ""}`;
+  });
+  alert(`Atividades de ${dateLabel}:\n\n${lines.join("\n")}`);
 }
 
 function populateCompanySelect(selectedId = "") {

@@ -1453,12 +1453,13 @@ async function exportPdf() {
     doc.text(`Filtro: ${query}`, 14, 32.2);
   }
 
-  drawStatusLegend(doc, 174, 30);
+  const legendBottomY = drawStatusLegend(doc, 118, 30);
+  const contentStartY = Math.max(42, legendBottomY + 8);
 
   if (state.currentView === "month") {
-    exportMonthPdf(doc);
+    exportMonthPdf(doc, contentStartY);
   } else {
-    exportWeekPdf(doc);
+    exportWeekPdf(doc, contentStartY);
   }
 
   doc.save(`agenda-fluxo-${toISODate(new Date())}.pdf`);
@@ -1539,12 +1540,11 @@ function getDescriptionText(event) {
 }
 
 
-function exportMonthPdf(doc) {
+function exportMonthPdf(doc, startY = 42) {
   const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
   const startX = 8;
-  const startY = 42;
   const contentWidth = pageWidth - startX * 2;
   const contentHeight = pageHeight - startY - 6;
   const colWidth = contentWidth / 7;
@@ -1604,12 +1604,11 @@ function exportMonthPdf(doc) {
   }
 }
 
-function exportWeekPdf(doc) {
+function exportWeekPdf(doc, startY = 42) {
   const weekStart = startOfWeek(state.currentDate);
   const startX = 8;
-  const startY = 42;
   const colWidth = 40;
-  const colHeight = 160;
+  const colHeight = doc.internal.pageSize.getHeight() - startY - 8;
 
   for (let i = 0; i < 7; i += 1) {
     const date = new Date(weekStart);
@@ -1658,15 +1657,25 @@ function drawStatusLegend(doc, startX, y) {
     { label: "Entrega tecnica finalizada", color: STATUS_COLORS.entrega_tecnica_finalizada },
   ];
   let x = startX;
+  let currentY = y;
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const maxX = pageWidth - 12;
+  const lineGap = 6.2;
   doc.setFontSize(8);
   items.forEach((item) => {
+    const itemWidth = item.label.length * 1.45 + 12;
+    if (x + itemWidth > maxX) {
+      x = startX;
+      currentY += lineGap;
+    }
     const { r, g, b } = hexToRgb(item.color);
     doc.setFillColor(r, g, b);
-    doc.circle(x, y, 1.5, "F");
+    doc.circle(x, currentY, 1.5, "F");
     doc.setTextColor(47, 63, 96);
-    doc.text(item.label, x + 3, y + 0.8);
-    x += item.label.length * 1.45 + 12;
+    doc.text(item.label, x + 3, currentY + 0.8);
+    x += itemWidth;
   });
+  return currentY;
 }
 
 function hexToRgb(hex) {

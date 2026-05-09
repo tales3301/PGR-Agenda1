@@ -545,11 +545,13 @@ body.dark .mini-day.active {
 .event-dialog {
   border: 1px solid var(--border);
   border-radius: 16px;
-  width: min(94vw, 440px);
+  width: min(96vw, 560px);
+  max-height: 92vh;
   background: var(--surface-elevated);
   color: var(--text);
   padding: 0;
   box-shadow: var(--shadow);
+  overflow-x: hidden;
 }
 
 .event-dialog::backdrop {
@@ -565,6 +567,7 @@ body.dark .mini-day.active {
   gap: 0.8rem;
   margin: 0;
   padding: 1.2rem 1.2rem 1rem;
+  overflow-x: hidden;
 }
 
 #eventForm h3,
@@ -607,6 +610,12 @@ body.dark .mini-day.active {
 #eventForm textarea {
   min-height: 54px;
   resize: none;
+}
+
+#eventForm {
+  max-height: calc(92vh - 24px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 #eventForm input:focus,
@@ -865,6 +874,7 @@ body.dark .event-dialog::backdrop {
   .event-dialog {
     width: 96vw;
     border-radius: 12px;
+    max-height: 95vh;
   }
 
   #eventForm,

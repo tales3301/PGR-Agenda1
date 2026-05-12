@@ -1456,10 +1456,22 @@ async function exportPdf() {
   const legendBottomY = drawStatusLegend(doc, 118, 30);
   const contentStartY = Math.max(42, legendBottomY + 8);
 
+  let rangeStart;
+  let rangeEnd;
   if (state.currentView === "month") {
     exportMonthPdf(doc, contentStartY);
+    rangeStart = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth(), 1);
+    rangeEnd = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 0);
   } else {
     exportWeekPdf(doc, contentStartY);
+    rangeStart = startOfWeek(state.currentDate);
+    rangeEnd = new Date(rangeStart);
+    rangeEnd.setDate(rangeEnd.getDate() + 6);
+  }
+
+  const occurrences = collectPdfOccurrencesInRange(rangeStart, rangeEnd);
+  if (occurrences.length > 0) {
+    appendPdfFullEventList(doc, occurrences);
   }
 
   doc.save(`agenda-fluxo-${toISODate(new Date())}.pdf`);
@@ -1539,6 +1551,99 @@ function getDescriptionText(event) {
   return String(event.description || event.reminderMessage || "").trim();
 }
 
+function pdfStatusLabel(event) {
+  const key = normalizeStatus(event.status, event.color);
+  const labels = {
+    pendente: "Pendente",
+    atrasado: "Atrasado",
+    concluido: "Concluido",
+    entrega_tecnica_finalizada: "Entrega tecnica finalizada",
+  };
+  return labels[key] || "Pendente";
+}
+
+/** Todas as ocorrencias visiveis no intervalo (respeita busca / filtros da tela). */
+function collectPdfOccurrencesInRange(rangeStart, rangeEnd) {
+  const items = [];
+  const cursor = new Date(
+    rangeStart.getFullYear(),
+    rangeStart.getMonth(),
+    rangeStart.getDate(),
+  );
+  const end = new Date(rangeEnd.getFullYear(), rangeEnd.getMonth(), rangeEnd.getDate());
+  while (cursor <= end) {
+    const dayCopy = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate());
+    getEventsForDate(dayCopy)
+      .filter(matchesSearch)
+      .forEach((event) => {
+        items.push({ date: dayCopy, event });
+      });
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  items.sort((a, b) => {
+    const da = toISODate(a.date).localeCompare(toISODate(b.date));
+    if (da !== 0) return da;
+    return byStartTime(a.event, b.event);
+  });
+  return items;
+}
+
+function appendPdfFullEventList(doc, occurrences) {
+  if (!occurrences.length) return;
+
+  doc.addPage();
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const margin = 10;
+  let y = 14;
+
+  doc.setFillColor(17, 35, 72);
+  doc.rect(0, 0, pageWidth, 14, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(13);
+  doc.text("Lista completa dos agendamentos", margin, 9.5);
+
+  doc.setTextColor(31, 47, 86);
+  y = 22;
+
+  const dateFmt = new Intl.DateTimeFormat("pt-BR", {
+    weekday: "short",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  const maxW = pageWidth - margin * 2;
+
+  occurrences.forEach(({ date, event }) => {
+    const head = dateFmt.format(date);
+    const timeRange = formatEventTimeRange(event).replace(/\s+/g, " ");
+    const title = String(event.title || "Sem titulo").trim();
+    const status = pdfStatusLabel(event);
+    const resp = String(event.responsible || "").trim();
+    const line1 = `${head}  |  ${timeRange}  |  ${title}`;
+    const line2 = resp ? `Resp.: ${resp}  |  ${status}` : status;
+
+    doc.setFontSize(9);
+    doc.setTextColor(31, 47, 86);
+    const wrapped1 = doc.splitTextToSize(line1, maxW);
+    wrapped1.forEach((ln) => {
+      if (y > pageHeight - 10) {
+        doc.addPage();
+        y = 14;
+      }
+      doc.text(ln, margin, y);
+      y += 4.2;
+    });
+    doc.setFontSize(8);
+    doc.setTextColor(90, 100, 120);
+    if (y > pageHeight - 10) {
+      doc.addPage();
+      y = 14;
+    }
+    doc.text(line2, margin + 1.5, y);
+    y += 5.5;
+  });
+}
 
 function exportMonthPdf(doc, startY = 42) {
   const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
@@ -1586,19 +1691,24 @@ function exportMonthPdf(doc, startY = 42) {
       doc.setTextColor(isToday ? 255 : isMuted ? 149 : 52, isToday ? 255 : isMuted ? 158 : 69, isToday ? 255 : isMuted ? 175 : 102);
       doc.text(dateText, cellX + 2.2, cellY + 5.2);
 
-      const events = getEventsForDate(date).filter(matchesSearch).slice(0, 5);
+      const allDayEvents = getEventsForDate(date).filter(matchesSearch);
       let lineY = cellY + 8.2;
-      events.forEach((event) => {
+      let drawn = 0;
+      allDayEvents.forEach((event) => {
         if (lineY > cellY + rowHeight - 6.8) return;
         drawEventChip(doc, cellX + 1.2, lineY, colWidth - 2.8, event, 5.3);
+        drawn += 1;
         lineY += 6;
       });
 
-      const totalEvents = getEventsForDate(date).filter(matchesSearch).length;
-      if (totalEvents > 5) {
+      if (allDayEvents.length > drawn) {
         doc.setFontSize(7.5);
         doc.setTextColor(120, 132, 160);
-        doc.text(`+${totalEvents - 5} mais`, cellX + 2, cellY + rowHeight - 2.1);
+        doc.text(
+          `+${allDayEvents.length - drawn} na lista completa`,
+          cellX + 2,
+          cellY + rowHeight - 2.1,
+        );
       }
     }
   }
@@ -1627,11 +1737,18 @@ function exportWeekPdf(doc, startY = 42) {
 
     const events = getEventsForDate(date).filter(matchesSearch);
     let lineY = startY + 10.6;
+    let drawn = 0;
     events.forEach((event) => {
       if (lineY > startY + colHeight - 7) return;
       drawEventChip(doc, x + 1.2, lineY, colWidth - 2.8, event, 6.2);
+      drawn += 1;
       lineY += 7;
     });
+    if (events.length > drawn) {
+      doc.setFontSize(7.5);
+      doc.setTextColor(120, 132, 160);
+      doc.text(`+${events.length - drawn} na lista completa`, x + 1.8, startY + colHeight - 2.6);
+    }
   }
 }
 

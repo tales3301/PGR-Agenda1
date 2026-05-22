@@ -8,7 +8,7 @@ const STATUS_COLORS = {
   concluido: "#22c55e",
   entrega_tecnica_finalizada: "#a855f7",
 };
-const MONTH_DAY_EVENT_VISIBLE_LIMIT = 5;
+const MONTH_DAY_EVENT_VISIBLE_LIMIT = 20;
 
 const state = {
   currentDate: new Date(),

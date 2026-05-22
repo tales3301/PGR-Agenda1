@@ -1692,23 +1692,23 @@ function exportMonthPdf(doc, startY = 42) {
       doc.text(dateText, cellX + 2.2, cellY + 5.2);
 
       const allDayEvents = getEventsForDate(date).filter(matchesSearch);
+      const eventsToShow = allDayEvents.slice(0, MONTH_DAY_EVENT_VISIBLE_LIMIT);
+      const maxLineY = cellY + rowHeight - 2.1;
       let lineY = cellY + 8.2;
       let drawn = 0;
-      allDayEvents.forEach((event) => {
-        if (lineY > cellY + rowHeight - 6.8) return;
-        drawEventChip(doc, cellX + 1.2, lineY, colWidth - 2.8, event, 5.3);
+      eventsToShow.forEach((event) => {
+        if (lineY >= maxLineY - 0.4) return;
+        const remaining = eventsToShow.length - drawn;
+        const slotH = Math.max(1.5, (maxLineY - lineY) / remaining);
+        lineY += drawEventChip(doc, cellX + 1.2, lineY, colWidth - 2.8, event, slotH);
         drawn += 1;
-        lineY += 6;
       });
 
-      if (allDayEvents.length > drawn) {
-        doc.setFontSize(7.5);
+      const hiddenCount = Math.max(0, allDayEvents.length - drawn);
+      if (hiddenCount > 0) {
+        doc.setFontSize(6.5);
         doc.setTextColor(120, 132, 160);
-        doc.text(
-          `+${allDayEvents.length - drawn} na lista completa`,
-          cellX + 2,
-          cellY + rowHeight - 2.1,
-        );
+        doc.text(`+${hiddenCount} na lista completa`, cellX + 2, cellY + rowHeight - 2.1);
       }
     }
   }
@@ -1736,34 +1736,65 @@ function exportWeekPdf(doc, startY = 42) {
     doc.text(head, x + 1.8, startY + 5.6);
 
     const events = getEventsForDate(date).filter(matchesSearch);
+    const eventsToShow = events.slice(0, MONTH_DAY_EVENT_VISIBLE_LIMIT);
+    const maxLineY = startY + colHeight - 2.6;
     let lineY = startY + 10.6;
     let drawn = 0;
-    events.forEach((event) => {
-      if (lineY > startY + colHeight - 7) return;
-      drawEventChip(doc, x + 1.2, lineY, colWidth - 2.8, event, 6.2);
+    eventsToShow.forEach((event) => {
+      if (lineY >= maxLineY - 0.4) return;
+      const remaining = eventsToShow.length - drawn;
+      const slotH = Math.max(1.8, (maxLineY - lineY) / remaining);
+      lineY += drawEventChip(doc, x + 1.2, lineY, colWidth - 2.8, event, slotH);
       drawn += 1;
-      lineY += 7;
     });
-    if (events.length > drawn) {
-      doc.setFontSize(7.5);
+    const hiddenCount = Math.max(0, events.length - drawn);
+    if (hiddenCount > 0) {
+      doc.setFontSize(6.5);
       doc.setTextColor(120, 132, 160);
-      doc.text(`+${events.length - drawn} na lista completa`, x + 1.8, startY + colHeight - 2.6);
+      doc.text(`+${hiddenCount} na lista completa`, x + 1.8, startY + colHeight - 2.6);
     }
   }
 }
 
-function drawEventChip(doc, x, y, w, event, h = 5.5) {
+function pdfEventChipLayout(doc, text, maxWidthMm, maxHeightMm) {
+  const minFont = 3.4;
+  const maxFont = 6.8;
+  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.35) {
+    doc.setFontSize(fontSize);
+    const lines = doc.splitTextToSize(text, maxWidthMm);
+    const lineH = fontSize * 0.42;
+    const height = lines.length * lineH + 1.1;
+    if (height <= maxHeightMm) {
+      return { fontSize, lines, lineH, height };
+    }
+  }
+  doc.setFontSize(minFont);
+  const lines = doc.splitTextToSize(text, maxWidthMm);
+  const lineH = minFont * 0.42;
+  return {
+    fontSize: minFont,
+    lines,
+    lineH,
+    height: Math.min(maxHeightMm, lines.length * lineH + 1.1),
+  };
+}
+
+function drawEventChip(doc, x, y, w, event, maxHeight = 5.5) {
   const statusColor = STATUS_COLORS[event.status || "pendente"] || "#3b82f6";
   const { r, g, b } = hexToRgb(statusColor);
-  doc.setFillColor(r, g, b);
-  doc.roundedRect(x, y, w, h, 1.1, 1.1, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(7);
-  const hasDescription = getDescriptionText(event).length > 0;
-  const marker = hasDescription ? " •" : "";
   const timeBit = formatEventTimeRange(event).replace(/\s+/g, " ");
-  const label = `${timeBit} ${event.title}${marker}`.replace(/\s+/g, " ").slice(0, 38);
-  doc.text(label, x + 1.1, y + h / 2 + 1.2);
+  const title = String(event.title || "Sem titulo").trim();
+  const label = `${timeBit} ${title}`.replace(/\s+/g, " ");
+  const layout = pdfEventChipLayout(doc, label, w - 2.2, maxHeight);
+
+  doc.setFillColor(r, g, b);
+  doc.roundedRect(x, y, w, layout.height, 1.1, 1.1, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(layout.fontSize);
+  layout.lines.forEach((line, index) => {
+    doc.text(line, x + 1.1, y + 0.95 + (index + 1) * layout.lineH);
+  });
+  return layout.height + 0.15;
 }
 
 function drawStatusLegend(doc, startX, y) {

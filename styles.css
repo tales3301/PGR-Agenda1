@@ -114,6 +114,19 @@ body {
   font-size: 0.9rem;
 }
 
+.agenda-view-hint {
+  margin-top: -0.35rem;
+  margin-bottom: 0.25rem;
+  line-height: 1.35;
+}
+
+body.is-readonly-agenda .primary-btn#newEventBtn,
+body.is-readonly-agenda #manageCompaniesBtn,
+body.is-readonly-agenda #shareBtn {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
 .companies-list {
   margin-top: 0.4rem;
   border: 1px solid var(--border);
@@ -401,6 +414,12 @@ textarea {
   background: #9334e6 !important;
 }
 
+.event-pill.is-assigned-external {
+  box-shadow: inset 0 0 0 2px rgba(255, 255, 255, 0.85);
+  outline: 2px dashed rgba(255, 255, 255, 0.55);
+  outline-offset: 1px;
+}
+
 .event-pill .event-title {
   display: block;
   line-height: 1.05;
@@ -542,6 +561,61 @@ body.dark .mini-day.active {
   background: #4d78ff;
 }
 
+.field-with-suggest .suggest-wrap {
+  position: relative;
+  width: 100%;
+}
+
+.company-suggest-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+  margin: 0;
+  padding: 0.35rem 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-elevated);
+  box-shadow: var(--shadow);
+}
+
+.company-suggest-list.hidden {
+  display: none;
+}
+
+.company-suggest-item {
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0.5rem 0.65rem;
+  font-size: 0.88rem;
+  cursor: pointer;
+  display: block;
+}
+
+.company-suggest-item:hover,
+.company-suggest-item:focus-visible {
+  background: var(--surface-muted, rgba(59, 130, 246, 0.12));
+  outline: none;
+}
+
+.company-suggest-item strong {
+  font-weight: 600;
+}
+
+.company-suggest-meta {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--text-muted, #64748b);
+  margin-top: 0.15rem;
+}
+
 .event-dialog {
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -552,6 +626,7 @@ body.dark .mini-day.active {
   padding: 0;
   box-shadow: var(--shadow);
   overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .event-dialog::backdrop {

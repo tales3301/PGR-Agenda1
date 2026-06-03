@@ -37,6 +37,17 @@
         </section>
 
         <section class="sidebar-block">
+          <h2>Ver agenda</h2>
+          <label class="filter-label">
+            Usuário
+            <select id="agendaViewSelect" aria-label="Selecionar agenda para visualizar" disabled>
+              <option value="">Minha agenda (+ compartilhadas)</option>
+            </select>
+          </label>
+          <p id="agendaViewHint" class="helper-text agenda-view-hint hidden"></p>
+        </section>
+
+        <section class="sidebar-block">
           <h2>Filtros</h2>
           <label class="filter-label">
             Responsável
@@ -123,13 +134,32 @@
             <option value="">Selecionar empresa (opcional)</option>
           </select>
         </label>
-        <label>
+        <label class="field-with-suggest">
           Organização
-          <input id="titleInput" type="text" required maxlength="80" />
+          <div class="suggest-wrap">
+            <input
+              id="titleInput"
+              type="text"
+              required
+              maxlength="80"
+              placeholder="Digite parte do nome da empresa"
+              autocomplete="off"
+            />
+            <ul id="companyNameSuggestBox" class="company-suggest-list hidden" role="listbox"></ul>
+          </div>
         </label>
-        <label>
+        <label class="field-with-suggest">
           CNPJ
-          <input id="cnpjInput" type="text" maxlength="18" />
+          <div class="suggest-wrap">
+            <input
+              id="cnpjInput"
+              type="text"
+              maxlength="18"
+              placeholder="Digite parte do CNPJ"
+              autocomplete="off"
+            />
+            <ul id="companyCnpjSuggestBox" class="company-suggest-list hidden" role="listbox"></ul>
+          </div>
         </label>
         <label>
           Endereço

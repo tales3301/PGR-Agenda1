@@ -10,6 +10,25 @@ const STATUS_COLORS = {
 };
 const MONTH_DAY_EVENT_VISIBLE_LIMIT = 20;
 
+/** Tamanhos pensados para impressão legível (pt no jsPDF). */
+const PDF_LAYOUT = {
+  monthEventsPerCell: 3,
+  chipFontMin: 7,
+  chipFontMax: 10,
+  headerTitle: 18,
+  headerSub: 11,
+  weekday: 11,
+  dayNumber: 11,
+  weekColumnHead: 10,
+  legend: 10,
+  hiddenHint: 8.5,
+  listPageTitle: 16,
+  listFontPrimary: 12,
+  listFontSecondary: 10.5,
+  listLineGap: 6,
+  listBlockGap: 8,
+};
+
 const state = {
   currentDate: new Date(),
   currentView: "month",
@@ -23,8 +42,13 @@ const state = {
   user: null,
   overdueSyncInProgress: false,
   authIntent: "login",
+  viewingUserId: null,
+  isSuperAdmin: false,
 };
 let pdfLogoAssetPromise = null;
+let companySuggestBlurTimer = null;
+const COMPANY_SUGGEST_MIN_CHARS = 2;
+const COMPANY_SUGGEST_MAX_ITEMS = 8;
 
 const refs = {
   currentLabel: document.getElementById("currentLabel"),
@@ -39,6 +63,8 @@ const refs = {
   responsibleFilterList: document.getElementById("responsibleFilterList"),
   companyFilter: document.getElementById("companyFilter"),
   companyFilterList: document.getElementById("companyFilterList"),
+  agendaViewSelect: document.getElementById("agendaViewSelect"),
+  agendaViewHint: document.getElementById("agendaViewHint"),
   searchBtn: document.getElementById("searchBtn"),
   newEventBtn: document.getElementById("newEventBtn"),
   showReminders: document.getElementById("showReminders"),
@@ -53,6 +79,8 @@ const refs = {
   eventDialog: document.getElementById("eventDialog"),
   eventForm: document.getElementById("eventForm"),
   companySelectInput: document.getElementById("companySelectInput"),
+  companyNameSuggestBox: document.getElementById("companyNameSuggestBox"),
+  companyCnpjSuggestBox: document.getElementById("companyCnpjSuggestBox"),
   dialogTitle: document.getElementById("dialogTitle"),
   titleInput: document.getElementById("titleInput"),
   cnpjInput: document.getElementById("cnpjInput"),
@@ -130,6 +158,7 @@ async function init() {
     await loadEventsFromApi();
     await loadCompaniesFromApi();
     await loadUsersFromApi();
+    updateAgendaViewUI();
   }
   renderAll();
   startReminderLoop();
@@ -161,6 +190,7 @@ function bindUI() {
   refs.responsibleFilter.addEventListener("change", renderCalendar);
   refs.companyFilter.addEventListener("input", renderCalendar);
   refs.companyFilter.addEventListener("change", renderCalendar);
+  refs.agendaViewSelect.addEventListener("change", onAgendaViewChange);
   refs.searchBtn.addEventListener("click", () => {
     renderCalendar();
   });
@@ -173,16 +203,27 @@ function bindUI() {
 
   refs.newEventBtn.addEventListener("click", () => {
     if (!requireAuth()) return;
+    if (isViewingOtherAgenda() && !canManageOtherAgenda()) {
+      alert("Volte para sua agenda para criar eventos. Apenas jidean pode criar na agenda de outros.");
+      return;
+    }
     openEventDialog();
   });
   refs.manageCompaniesBtn.addEventListener("click", onOpenCompaniesDialog);
 
   refs.cancelBtn.addEventListener("click", () => {
+    hideCompanySuggestBoxes();
     refs.eventDialog.close();
   });
 
   refs.eventForm.addEventListener("submit", onSubmitEvent);
   refs.companySelectInput.addEventListener("change", onCompanySelectInEvent);
+  refs.titleInput.addEventListener("input", onOrganizationSearchInput);
+  refs.titleInput.addEventListener("blur", () => scheduleCompanySuggestBlur("name"));
+  refs.titleInput.addEventListener("focus", onOrganizationSearchInput);
+  refs.cnpjInput.addEventListener("input", onCnpjSearchInput);
+  refs.cnpjInput.addEventListener("blur", () => scheduleCompanySuggestBlur("cnpj"));
+  refs.cnpjInput.addEventListener("focus", onCnpjSearchInput);
   refs.confirmDoneBtn.addEventListener("click", onConfirmDone);
   refs.saveCompanyFromEventBtn.addEventListener("click", onSaveCompanyFromEvent);
   refs.deleteBtn.addEventListener("click", onDeleteEvent);
@@ -228,9 +269,11 @@ function shiftDate(direction) {
 }
 
 function renderAll() {
+  populateAgendaViewSelect();
   populateResponsibleFilter();
   populateCompanyFilter();
   populateCompanySelect();
+  populateCompanySuggestions();
   renderLabel();
   renderMiniCalendar();
   renderCalendar();
@@ -358,6 +401,7 @@ function renderMonthView() {
     }
     dayCell.addEventListener("dblclick", () => {
       if (!requireAuth()) return;
+      if (isViewingOtherAgenda() && !canManageOtherAgenda()) return;
       openEventDialog(null, cursor);
     });
 
@@ -430,6 +474,7 @@ function renderWeekView() {
       slot.className = "week-slot";
       slot.addEventListener("dblclick", () => {
         if (!requireAuth()) return;
+        if (isViewingOtherAgenda() && !canManageOtherAgenda()) return;
         const defaultDate = toISODate(slotDate);
         openEventDialog(null, slotDate, `${String(hour).padStart(2, "0")}:00`, defaultDate);
       });
@@ -451,9 +496,15 @@ function createEventPill(event) {
   btn.type = "button";
   const normalizedStatus = normalizeStatus(event.status, event.color);
   btn.className = `event-pill status-${normalizedStatus}`;
+  if (isEventExternallyAssigned(event)) {
+    btn.classList.add("is-assigned-external");
+    btn.title = `Seu agendamento (agenda de ${event.ownerUsername || "outro usuario"})`;
+  }
   const title = document.createElement("span");
   title.className = "event-title";
-  title.textContent = event.title;
+  const ownerHint =
+    isEventExternallyAssigned(event) && event.ownerUsername ? ` · ${event.ownerUsername}` : "";
+  title.textContent = `${event.title}${ownerHint}`;
   const time = document.createElement("span");
   time.className = "event-time";
   time.textContent = formatEventTimeRange(event);
@@ -495,6 +546,135 @@ function showHiddenDayEvents(dateObj, events) {
   alert(`Atividades de ${dateLabel}:\n\n${lines.join("\n")}`);
 }
 
+function onlyDigits(value) {
+  return String(value || "").replace(/\D/g, "");
+}
+
+function formatCompanySelectLabel(company) {
+  const name = String(company.name || "").trim() || "Empresa";
+  const cnpj = String(company.cnpj || "").trim();
+  return cnpj ? `${name} — ${cnpj}` : name;
+}
+
+function normalizeSearchText(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function scoreCompanyMatch(company, query, mode = "any") {
+  const q = normalizeSearchText(query);
+  if (!q || q.length < COMPANY_SUGGEST_MIN_CHARS) return 0;
+
+  const name = normalizeSearchText(company.name);
+  const cnpjDigits = onlyDigits(company.cnpj);
+  const qDigits = onlyDigits(query);
+
+  let score = 0;
+
+  if (mode === "name" || mode === "any") {
+    if (name === q) score = Math.max(score, 100);
+    else if (name.startsWith(q)) score = Math.max(score, 85);
+    else if (name.includes(q)) score = Math.max(score, 65);
+    else if (q.length >= 3 && name.split(/\s+/).some((word) => word.startsWith(q))) score = Math.max(score, 72);
+  }
+
+  if ((mode === "cnpj" || mode === "any") && qDigits.length >= COMPANY_SUGGEST_MIN_CHARS) {
+    if (cnpjDigits === qDigits) score = Math.max(score, 100);
+    else if (cnpjDigits.startsWith(qDigits)) score = Math.max(score, 88);
+    else if (cnpjDigits.includes(qDigits)) score = Math.max(score, 70);
+  }
+
+  return score;
+}
+
+function searchCompanies(query, mode = "any", limit = COMPANY_SUGGEST_MAX_ITEMS) {
+  return state.companies
+    .map((company) => ({ company, score: scoreCompanyMatch(company, query, mode) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || String(a.company.name || "").localeCompare(String(b.company.name || ""), "pt-BR"))
+    .slice(0, limit);
+}
+
+function findBestCompanyMatch(query, mode = "any") {
+  const results = searchCompanies(query, mode, 2);
+  if (!results.length) return null;
+  const best = results[0];
+  if (best.score >= 95) return best.company;
+  if (best.score >= 80 && (!results[1] || best.score - results[1].score >= 15)) return best.company;
+  return null;
+}
+
+function hideCompanySuggestBoxes() {
+  refs.companyNameSuggestBox?.classList.add("hidden");
+  refs.companyCnpjSuggestBox?.classList.add("hidden");
+}
+
+function pickCompanyFromSearch(company) {
+  if (!company) return;
+  applyCompanyToEventForm(company.id);
+  populateCompanySelect(company.id);
+  hideCompanySuggestBoxes();
+}
+
+function renderCompanySuggestBox(boxEl, results) {
+  if (!boxEl) return;
+  boxEl.innerHTML = "";
+  if (!results.length) {
+    boxEl.classList.add("hidden");
+    return;
+  }
+  results.forEach(({ company }) => {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "company-suggest-item";
+    btn.setAttribute("role", "option");
+    const name = String(company.name || "").trim() || "Empresa";
+    const cnpj = String(company.cnpj || "").trim();
+    btn.innerHTML = `<strong>${name}</strong>${cnpj ? `<span class="company-suggest-meta">CNPJ: ${cnpj}</span>` : ""}`;
+    btn.addEventListener("mousedown", (event) => {
+      event.preventDefault();
+      pickCompanyFromSearch(company);
+    });
+    boxEl.appendChild(btn);
+  });
+  boxEl.classList.remove("hidden");
+}
+
+function onOrganizationSearchInput() {
+  const query = refs.titleInput.value.trim();
+  if (query.length < COMPANY_SUGGEST_MIN_CHARS) {
+    refs.companyNameSuggestBox?.classList.add("hidden");
+    return;
+  }
+  const results = searchCompanies(query, "name");
+  renderCompanySuggestBox(refs.companyNameSuggestBox, results);
+  refs.companyCnpjSuggestBox?.classList.add("hidden");
+}
+
+function onCnpjSearchInput() {
+  const query = refs.cnpjInput.value.trim();
+  if (onlyDigits(query).length < COMPANY_SUGGEST_MIN_CHARS && query.length < COMPANY_SUGGEST_MIN_CHARS) {
+    refs.companyCnpjSuggestBox?.classList.add("hidden");
+    return;
+  }
+  const results = searchCompanies(query, "cnpj");
+  renderCompanySuggestBox(refs.companyCnpjSuggestBox, results);
+  refs.companyNameSuggestBox?.classList.add("hidden");
+}
+
+function scheduleCompanySuggestBlur(mode) {
+  if (companySuggestBlurTimer) clearTimeout(companySuggestBlurTimer);
+  companySuggestBlurTimer = setTimeout(() => {
+    const query = mode === "cnpj" ? refs.cnpjInput.value : refs.titleInput.value;
+    const company = findBestCompanyMatch(query, mode === "cnpj" ? "cnpj" : "name");
+    if (company) pickCompanyFromSearch(company);
+    else hideCompanySuggestBoxes();
+  }, 180);
+}
+
 function populateCompanySelect(selectedId = "") {
   const sel = refs.companySelectInput;
   if (!sel) return;
@@ -510,12 +690,16 @@ function populateCompanySelect(selectedId = "") {
     .forEach((company) => {
       const opt = document.createElement("option");
       opt.value = company.id;
-      opt.textContent = company.name || "Empresa";
+      opt.textContent = formatCompanySelectLabel(company);
       sel.appendChild(opt);
     });
   if (previous && state.companies.some((company) => company.id === previous)) {
     sel.value = previous;
   }
+}
+
+function populateCompanySuggestions() {
+  hideCompanySuggestBoxes();
 }
 
 function applyCompanyToEventForm(companyId) {
@@ -568,20 +752,80 @@ async function onSaveCompanyFromEvent() {
     await loadCompaniesFromApi();
     const newId = data?.company?.id;
     populateCompanySelect(newId || "");
-    alert("Empresa salva. Use o seletor Empresa cadastrada nos próximos eventos.");
+    populateCompanySuggestions();
+    renderAll();
+    alert("Empresa salva no banco. Nas próximas vezes, digite o nome ou CNPJ para preencher automaticamente.");
   } catch (error) {
     alert(error.message);
   }
 }
 
+function isViewingOtherAgenda() {
+  return Boolean(state.viewingUserId && state.user && state.viewingUserId !== state.user.id);
+}
+
+function canManageOtherAgenda() {
+  return state.isSuperAdmin;
+}
+
+function getEventEditMode(event) {
+  if (!event) return "full";
+  if (event.canFullEdit) return "full";
+  if (event.canEditStatusOnly) return "statusOnly";
+  return "readonly";
+}
+
+function setEventFormEditMode(mode) {
+  const readOnly = mode === "readonly";
+  const statusOnly = mode === "statusOnly";
+  refs.eventForm.querySelectorAll("input, select, textarea").forEach((field) => {
+    if (field.id === "statusInput") {
+      field.disabled = readOnly;
+      return;
+    }
+    field.disabled = readOnly || statusOnly;
+  });
+  const submitBtn = refs.eventForm.querySelector('button[type="submit"]');
+  if (submitBtn) {
+    submitBtn.classList.toggle("hidden", readOnly);
+    submitBtn.textContent = statusOnly ? "Salvar status" : "Salvar";
+  }
+  refs.saveCompanyFromEventBtn.classList.toggle("hidden", readOnly || statusOnly);
+  refs.statusInput.disabled = readOnly;
+}
+
+function isEventExternallyAssigned(event) {
+  return Boolean(event?.isAssignedToMe && !event?.canFullEdit);
+}
+
 function openEventDialog(event = null, seedDate = null, seedStart = "09:00", seedDateOverride = null) {
+  const editMode = event ? getEventEditMode(event) : isViewingOtherAgenda() && !canManageOtherAgenda() ? "readonly" : "full";
+  const readOnly = editMode === "readonly";
+  const statusOnly = editMode === "statusOnly";
   state.editingId = event ? event.id : null;
-  refs.dialogTitle.textContent = event ? "Editar evento" : "Novo evento";
-  refs.deleteBtn.classList.toggle("hidden", !event);
+  refs.dialogTitle.textContent = readOnly
+    ? "Visualizar evento"
+    : statusOnly
+      ? "Atualizar status do agendamento"
+      : event
+        ? "Editar evento"
+        : "Novo evento";
+  refs.deleteBtn.classList.toggle("hidden", readOnly || statusOnly || !event || !event?.canFullEdit);
   refs.confirmDoneBtn.classList.toggle(
     "hidden",
-    !event || ["concluido", "entrega_tecnica_finalizada"].includes(normalizeStatus(event.status, event.color)),
+    readOnly ||
+      !event ||
+      ["concluido", "entrega_tecnica_finalizada"].includes(normalizeStatus(event?.status, event?.color)),
   );
+  if (statusOnly || (event && (event.canFullEdit || event.canEditStatusOnly))) {
+    refs.confirmDoneBtn.classList.remove("hidden");
+    if (
+      event &&
+      ["concluido", "entrega_tecnica_finalizada"].includes(normalizeStatus(event.status, event.color))
+    ) {
+      refs.confirmDoneBtn.classList.add("hidden");
+    }
+  }
 
   const dateSeed = seedDateOverride || (seedDate ? toISODate(seedDate) : toISODate(state.currentDate));
   refs.titleInput.value = event ? event.title : "";
@@ -608,6 +852,8 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   refs.statusInput.value = event ? normalizeStatus(event.status, event.color) : "pendente";
   refs.descriptionInput.value = event ? getDescriptionText(event) : "";
 
+  hideCompanySuggestBoxes();
+  setEventFormEditMode(editMode);
   refs.eventDialog.showModal();
 }
 
@@ -648,32 +894,47 @@ async function onConfirmDone() {
 
 async function onSubmitEvent(event) {
   event.preventDefault();
+  if (isViewingOtherAgenda() && !canManageOtherAgenda()) {
+    const current = state.events.find((item) => item.id === state.editingId);
+    if (!current || getEventEditMode(current) === "readonly") return;
+  }
+  const current = state.events.find((item) => item.id === state.editingId);
+  const editMode = current ? getEventEditMode(current) : "full";
+  if (editMode === "readonly") return;
+
   const descriptionText = refs.descriptionInput.value.trim();
   const selectedStatus = normalizeStatus(refs.statusInput.value);
-  const payload = {
-    id: state.editingId || crypto.randomUUID(),
-    title: refs.titleInput.value.trim(),
-    cnpj: refs.cnpjInput.value.trim(),
-    address: refs.addressInput.value.trim(),
-    location: refs.locationInput.value.trim(),
-    contactName: refs.contactNameInput.value.trim(),
-    contactPhone: refs.contactPhoneInput.value.trim(),
-    contactEmail: refs.contactEmailInput.value.trim(),
-    responsible: refs.responsibleInput.value.trim(),
-    date: refs.startDateInput.value,
-    endDate: refs.endDateInput.value,
-    start: refs.startInput.value,
-    end: refs.endInput.value,
-    color: STATUS_COLORS[selectedStatus] || STATUS_COLORS.pendente,
-    repeat: refs.repeatInput.value,
-    status: selectedStatus,
-    reminderMinutes: 10,
-    description: descriptionText,
-    reminderMessage: descriptionText,
-    reminderSentAt: null,
-  };
+  const payload =
+    editMode === "statusOnly" && current
+      ? {
+          ...current,
+          status: selectedStatus,
+          color: STATUS_COLORS[selectedStatus] || STATUS_COLORS.pendente,
+        }
+      : {
+          id: state.editingId || crypto.randomUUID(),
+          title: refs.titleInput.value.trim(),
+          cnpj: refs.cnpjInput.value.trim(),
+          address: refs.addressInput.value.trim(),
+          location: refs.locationInput.value.trim(),
+          contactName: refs.contactNameInput.value.trim(),
+          contactPhone: refs.contactPhoneInput.value.trim(),
+          contactEmail: refs.contactEmailInput.value.trim(),
+          responsible: refs.responsibleInput.value.trim(),
+          date: refs.startDateInput.value,
+          endDate: refs.endDateInput.value,
+          start: refs.startInput.value,
+          end: refs.endInput.value,
+          color: STATUS_COLORS[selectedStatus] || STATUS_COLORS.pendente,
+          repeat: refs.repeatInput.value,
+          status: selectedStatus,
+          reminderMinutes: 10,
+          description: descriptionText,
+          reminderMessage: descriptionText,
+          reminderSentAt: null,
+        };
 
-  if (!payload.title) return;
+  if (editMode !== "statusOnly" && !payload.title) return;
   if (payload.endDate < payload.date) {
     alert("A data de fim precisa ser maior ou igual a data de início.");
     return;
@@ -1015,6 +1276,7 @@ function hydrateSession() {
     const parsed = JSON.parse(raw);
     state.token = parsed.token;
     state.user = parsed.user;
+    state.isSuperAdmin = Boolean(parsed.user?.isSuperAdmin);
   } catch {
     state.token = null;
     state.user = null;
@@ -1046,6 +1308,70 @@ function updateAuthStatus() {
     refs.logoutBtn.classList.add("hidden");
     refs.openLoginBtn.classList.remove("hidden");
     refs.openRegisterBtn.classList.remove("hidden");
+  }
+  updateAgendaViewUI();
+}
+
+function populateAgendaViewSelect() {
+  const sel = refs.agendaViewSelect;
+  if (!sel) return;
+  if (!state.token) {
+    sel.disabled = true;
+    sel.innerHTML = '<option value="">Minha agenda (+ compartilhadas)</option>';
+    return;
+  }
+  sel.disabled = false;
+  const previous = state.viewingUserId || "";
+  sel.innerHTML = "";
+  const ownOpt = document.createElement("option");
+  ownOpt.value = "";
+  ownOpt.textContent = "Minha agenda (+ compartilhadas)";
+  sel.appendChild(ownOpt);
+  state.users
+    .filter((user) => user.id !== state.user?.id)
+    .forEach((user) => {
+      const opt = document.createElement("option");
+      opt.value = user.id;
+      opt.textContent = `Agenda de ${user.username}`;
+      sel.appendChild(opt);
+    });
+  const hasPrevious = previous && state.users.some((user) => user.id === previous);
+  sel.value = hasPrevious ? previous : "";
+  if (!hasPrevious) state.viewingUserId = null;
+}
+
+function updateAgendaViewUI() {
+  const viewingOther = isViewingOtherAgenda();
+  const readOnly = viewingOther && !canManageOtherAgenda();
+  document.body.classList.toggle("is-readonly-agenda", readOnly);
+  if (!refs.agendaViewHint) return;
+  if (!viewingOther) {
+    refs.agendaViewHint.classList.add("hidden");
+    refs.agendaViewHint.textContent = "";
+    return;
+  }
+  const owner = state.users.find((user) => user.id === state.viewingUserId);
+  const ownerName = owner?.username || "outro usuário";
+  if (state.isSuperAdmin) {
+    refs.agendaViewHint.textContent = `Visualizando a agenda de ${ownerName}. Voce (jidean) pode editar tudo.`;
+  } else {
+    refs.agendaViewHint.textContent = `Visualizando a agenda de ${ownerName}. Voce pode alterar o status dos seus agendamentos.`;
+  }
+  refs.agendaViewHint.classList.remove("hidden");
+}
+
+async function onAgendaViewChange() {
+  const selected = refs.agendaViewSelect.value || null;
+  state.viewingUserId = selected;
+  try {
+    await loadEventsFromApi();
+    updateAgendaViewUI();
+    renderAll();
+  } catch (error) {
+    alert(error.message);
+    state.viewingUserId = null;
+    refs.agendaViewSelect.value = "";
+    updateAgendaViewUI();
   }
 }
 
@@ -1089,6 +1415,8 @@ async function onAuthSubmit(event) {
     });
     state.token = data.token;
     state.user = data.user;
+    state.isSuperAdmin = Boolean(data.user?.isSuperAdmin);
+    state.viewingUserId = null;
     persistSession();
     updateAuthStatus();
     refs.authDialog.close();
@@ -1166,6 +1494,8 @@ async function onConfirmPasswordReset() {
 function logout() {
   state.token = null;
   state.user = null;
+  state.isSuperAdmin = false;
+  state.viewingUserId = null;
   state.events = [];
   state.companies = [];
   state.users = [];
@@ -1176,6 +1506,10 @@ function logout() {
 
 function onOpenShare() {
   if (!requireAuth()) return;
+  if (isViewingOtherAgenda() && !canManageOtherAgenda()) {
+    alert("Volte para sua agenda para compartilhar.");
+    return;
+  }
   refs.shareDialog.showModal();
 }
 
@@ -1232,6 +1566,10 @@ function renderCompaniesList() {
 
 function onOpenCompaniesDialog() {
   if (!requireAuth()) return;
+  if (isViewingOtherAgenda() && !canManageOtherAgenda()) {
+    alert("Volte para sua agenda para gerenciar empresas.");
+    return;
+  }
   resetCompanyForm();
   renderCompaniesList();
   refs.companiesDialog.showModal();
@@ -1315,7 +1653,12 @@ async function onShareSubmit(event) {
 
 async function loadEventsFromApi() {
   if (!state.token) return;
-  const data = await api("/events");
+  const endpoint = state.viewingUserId ? `/users/${state.viewingUserId}/events` : "/events";
+  const data = await api(endpoint);
+  if (typeof data.isSuperAdmin === "boolean") {
+    state.isSuperAdmin = data.isSuperAdmin;
+    if (state.user) state.user.isSuperAdmin = data.isSuperAdmin;
+  }
   state.events = (data.events || []).map((event) => ({
     ...event,
     status: normalizeStatus(event.status, event.color),
@@ -1325,6 +1668,9 @@ async function loadEventsFromApi() {
       STATUS_COLORS.pendente,
     description: getDescriptionText(event),
     reminderMessage: getDescriptionText(event),
+    canFullEdit: Boolean(event.canFullEdit),
+    canEditStatusOnly: Boolean(event.canEditStatusOnly),
+    isAssignedToMe: Boolean(event.isAssignedToMe),
   }));
 }
 
@@ -1410,19 +1756,65 @@ async function exportPdf() {
     return;
   }
   const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
   const query = refs.searchInput.value.trim();
   const label = new Intl.DateTimeFormat("pt-BR", { month: "long", year: "numeric" }).format(
     state.currentDate,
   );
+  const viewLabel = state.currentView === "month" ? "Mensal" : "Semanal";
+  const ownerLabel = isViewingOtherAgenda()
+    ? ` | Agenda de ${state.users.find((u) => u.id === state.viewingUserId)?.username || "usuario"}`
+    : "";
+  const subtitle = `Visualizacao: ${viewLabel} | Periodo: ${label}${ownerLabel}`;
 
-  doc.setFillColor(17, 35, 72);
-  doc.rect(0, 0, 297, 24, "F");
+  let rangeStart;
+  let rangeEnd;
+  if (state.currentView === "month") {
+    rangeStart = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth(), 1);
+    rangeEnd = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 0);
+  } else {
+    rangeStart = startOfWeek(state.currentDate);
+    rangeEnd = new Date(rangeStart);
+    rangeEnd.setDate(rangeEnd.getDate() + 6);
+  }
+
+  const occurrences = collectPdfOccurrencesInRange(rangeStart, rangeEnd);
+  const hasList = occurrences.length > 0;
+  const doc = new jsPDF({
+    orientation: hasList ? "portrait" : "landscape",
+    unit: "mm",
+    format: "a4",
+  });
+
+  if (hasList) {
+    appendPdfFullEventList(doc, occurrences, { isFirstSection: true, subtitle, query });
+    doc.addPage("a4", "landscape");
+  }
+
   const logoAsset = await getPdfLogoAsset();
+  const contentStartY = drawPdfCalendarPageHeader(doc, {
+    logoAsset,
+    subtitle,
+    query,
+  });
+
+  if (state.currentView === "month") {
+    exportMonthPdf(doc, contentStartY);
+  } else {
+    exportWeekPdf(doc, contentStartY);
+  }
+
+  doc.save(`agenda-fluxo-${toISODate(new Date())}.pdf`);
+}
+
+function drawPdfCalendarPageHeader(doc, { logoAsset, subtitle, query }) {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const headerH = 20;
+  doc.setFillColor(17, 35, 72);
+  doc.rect(0, 0, pageWidth, headerH, "F");
   let titleX = 37;
   if (logoAsset?.dataUrl) {
-    const maxLogoWidth = 28;
-    const maxLogoHeight = 18;
+    const maxLogoWidth = 24;
+    const maxLogoHeight = 14;
     const logoRatio = logoAsset.width / logoAsset.height;
     let drawWidth = maxLogoWidth;
     let drawHeight = drawWidth / logoRatio;
@@ -1431,50 +1823,28 @@ async function exportPdf() {
       drawWidth = drawHeight * logoRatio;
     }
     const logoX = 8;
-    const logoY = 4 + (maxLogoHeight - drawHeight) / 2;
+    const logoY = 3 + (maxLogoHeight - drawHeight) / 2;
     doc.addImage(logoAsset.dataUrl, "PNG", logoX, logoY, drawWidth, drawHeight);
     titleX = logoX + drawWidth + 5;
   }
   doc.setTextColor(255, 255, 255);
-  doc.setFontSize(16);
-  doc.text("Agenda Fluxo PGR", titleX, 10);
-  doc.setFontSize(9);
-  doc.text(
-    `Visualizacao: ${state.currentView === "month" ? "Mensal" : "Semanal"} | Periodo: ${label}`,
-    titleX,
-    16,
-  );
+  doc.setFontSize(PDF_LAYOUT.headerTitle);
+  doc.text("Agenda Fluxo PGR — Visão geral", titleX, 9);
+  doc.setFontSize(PDF_LAYOUT.headerSub);
+  doc.text(subtitle, titleX, 15.5);
 
+  let filterY = headerH + 4;
   if (query) {
     doc.setTextColor(22, 35, 65);
     doc.setFillColor(233, 240, 255);
-    doc.roundedRect(12, 27, 95, 8, 1.8, 1.8, "F");
-    doc.setFontSize(8.5);
-    doc.text(`Filtro: ${query}`, 14, 32.2);
+    doc.roundedRect(10, filterY, Math.min(120, pageWidth - 20), 9, 1.8, 1.8, "F");
+    doc.setFontSize(PDF_LAYOUT.headerSub);
+    doc.text(`Filtro: ${query}`, 12, filterY + 6);
+    filterY += 12;
   }
 
-  const legendBottomY = drawStatusLegend(doc, 118, 30);
-  const contentStartY = Math.max(42, legendBottomY + 8);
-
-  let rangeStart;
-  let rangeEnd;
-  if (state.currentView === "month") {
-    exportMonthPdf(doc, contentStartY);
-    rangeStart = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth(), 1);
-    rangeEnd = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 0);
-  } else {
-    exportWeekPdf(doc, contentStartY);
-    rangeStart = startOfWeek(state.currentDate);
-    rangeEnd = new Date(rangeStart);
-    rangeEnd.setDate(rangeEnd.getDate() + 6);
-  }
-
-  const occurrences = collectPdfOccurrencesInRange(rangeStart, rangeEnd);
-  if (occurrences.length > 0) {
-    appendPdfFullEventList(doc, occurrences);
-  }
-
-  doc.save(`agenda-fluxo-${toISODate(new Date())}.pdf`);
+  const legendBottomY = drawStatusLegend(doc, 10, filterY + 2);
+  return Math.max(headerH + 14, legendBottomY + 6);
 }
 
 async function api(path, options = {}) {
@@ -1588,31 +1958,58 @@ function collectPdfOccurrencesInRange(rangeStart, rangeEnd) {
   return items;
 }
 
-function appendPdfFullEventList(doc, occurrences) {
+function appendPdfListPageHeader(doc, margin, subtitle = "", query = "") {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const headerH = 18;
+  doc.setFillColor(17, 35, 72);
+  doc.rect(0, 0, pageWidth, headerH, "F");
+  doc.setTextColor(255, 255, 255);
+  doc.setFontSize(PDF_LAYOUT.listPageTitle);
+  doc.text("Lista completa dos agendamentos", margin, 9.5);
+  doc.setFontSize(PDF_LAYOUT.headerSub);
+  if (subtitle) {
+    doc.text(subtitle, margin, 14.5);
+  } else {
+    doc.text("Seção principal para leitura e impressão.", margin, 14.5);
+  }
+  let nextY = headerH + 6;
+  if (query) {
+    doc.setTextColor(22, 35, 65);
+    doc.setFillColor(233, 240, 255);
+    doc.roundedRect(margin, nextY, pageWidth - margin * 2, 9, 1.8, 1.8, "F");
+    doc.setFontSize(PDF_LAYOUT.headerSub);
+    doc.text(`Filtro: ${query}`, margin + 2, nextY + 6);
+    nextY += 12;
+  }
+  return nextY + 4;
+}
+
+function appendPdfFullEventList(doc, occurrences, options = {}) {
   if (!occurrences.length) return;
 
-  doc.addPage();
+  const { isFirstSection = false, subtitle = "", query = "" } = options;
+  if (!isFirstSection) {
+    doc.addPage("a4", "portrait");
+  }
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 10;
-  let y = 14;
-
-  doc.setFillColor(17, 35, 72);
-  doc.rect(0, 0, pageWidth, 14, "F");
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(13);
-  doc.text("Lista completa dos agendamentos", margin, 9.5);
-
-  doc.setTextColor(31, 47, 86);
-  y = 22;
+  const margin = 14;
+  let y = appendPdfListPageHeader(doc, margin, subtitle, query);
 
   const dateFmt = new Intl.DateTimeFormat("pt-BR", {
-    weekday: "short",
+    weekday: "long",
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
   });
   const maxW = pageWidth - margin * 2;
+  const bottomLimit = pageHeight - 14;
+
+  const ensureSpace = (neededMm) => {
+    if (y + neededMm <= bottomLimit) return;
+    doc.addPage("a4", "portrait");
+    y = appendPdfListPageHeader(doc, margin, subtitle, query);
+  };
 
   occurrences.forEach(({ date, event }) => {
     const head = dateFmt.format(date);
@@ -1620,28 +2017,39 @@ function appendPdfFullEventList(doc, occurrences) {
     const title = String(event.title || "Sem titulo").trim();
     const status = pdfStatusLabel(event);
     const resp = String(event.responsible || "").trim();
-    const line1 = `${head}  |  ${timeRange}  |  ${title}`;
-    const line2 = resp ? `Resp.: ${resp}  |  ${status}` : status;
+    const location = String(event.location || "").trim();
+    const line1 = `${timeRange}  —  ${title}`;
+    const line2Parts = [status];
+    if (resp) line2Parts.unshift(`Resp.: ${resp}`);
+    if (location) line2Parts.push(`Local: ${location}`);
+    const line2 = line2Parts.join("  |  ");
 
-    doc.setFontSize(9);
+    doc.setFontSize(PDF_LAYOUT.listFontPrimary);
+    doc.setFont("helvetica", "bold");
     doc.setTextColor(31, 47, 86);
+    ensureSpace(12);
+    doc.text(head, margin, y);
+    y += PDF_LAYOUT.listLineGap;
+
+    doc.setFont("helvetica", "normal");
     const wrapped1 = doc.splitTextToSize(line1, maxW);
+    const blockH1 = wrapped1.length * PDF_LAYOUT.listLineGap;
+    ensureSpace(blockH1 + PDF_LAYOUT.listBlockGap);
     wrapped1.forEach((ln) => {
-      if (y > pageHeight - 10) {
-        doc.addPage();
-        y = 14;
-      }
       doc.text(ln, margin, y);
-      y += 4.2;
+      y += PDF_LAYOUT.listLineGap;
     });
-    doc.setFontSize(8);
-    doc.setTextColor(90, 100, 120);
-    if (y > pageHeight - 10) {
-      doc.addPage();
-      y = 14;
-    }
-    doc.text(line2, margin + 1.5, y);
-    y += 5.5;
+
+    doc.setFontSize(PDF_LAYOUT.listFontSecondary);
+    doc.setTextColor(70, 82, 110);
+    const wrapped2 = doc.splitTextToSize(line2, maxW);
+    const blockH2 = wrapped2.length * (PDF_LAYOUT.listLineGap - 0.5);
+    ensureSpace(blockH2 + PDF_LAYOUT.listBlockGap);
+    wrapped2.forEach((ln) => {
+      doc.text(ln, margin, y);
+      y += PDF_LAYOUT.listLineGap - 0.5;
+    });
+    y += PDF_LAYOUT.listBlockGap - 2;
   });
 }
 
@@ -1662,10 +2070,10 @@ function exportMonthPdf(doc, startY = 42) {
 
   weekdays.forEach((day, idx) => {
     doc.setFillColor(226, 236, 255);
-    doc.roundedRect(startX + idx * colWidth, startY - 9, colWidth - 0.3, 8, 1.5, 1.5, "F");
-    doc.setFontSize(9);
+    doc.roundedRect(startX + idx * colWidth, startY - 10, colWidth - 0.3, 9, 1.5, 1.5, "F");
+    doc.setFontSize(PDF_LAYOUT.weekday);
     doc.setTextColor(31, 47, 86);
-    doc.text(day, startX + idx * colWidth + 1.8, startY - 4.2);
+    doc.text(day, startX + idx * colWidth + 2, startY - 4.5);
   });
 
   for (let row = 0; row < 6; row += 1) {
@@ -1687,14 +2095,14 @@ function exportMonthPdf(doc, startY = 42) {
       }
 
       const dateText = String(date.getDate());
-      doc.setFontSize(8.3);
+      doc.setFontSize(PDF_LAYOUT.dayNumber);
       doc.setTextColor(isToday ? 255 : isMuted ? 149 : 52, isToday ? 255 : isMuted ? 158 : 69, isToday ? 255 : isMuted ? 175 : 102);
-      doc.text(dateText, cellX + 2.2, cellY + 5.2);
+      doc.text(dateText, cellX + 2.4, cellY + 6);
 
       const allDayEvents = getEventsForDate(date).filter(matchesSearch);
-      const eventsToShow = allDayEvents.slice(0, MONTH_DAY_EVENT_VISIBLE_LIMIT);
-      const maxLineY = cellY + rowHeight - 2.1;
-      let lineY = cellY + 8.2;
+      const eventsToShow = allDayEvents.slice(0, PDF_LAYOUT.monthEventsPerCell);
+      const maxLineY = cellY + rowHeight - 3;
+      let lineY = cellY + 9.5;
       let drawn = 0;
       eventsToShow.forEach((event) => {
         if (lineY >= maxLineY - 0.4) return;
@@ -1706,9 +2114,9 @@ function exportMonthPdf(doc, startY = 42) {
 
       const hiddenCount = Math.max(0, allDayEvents.length - drawn);
       if (hiddenCount > 0) {
-        doc.setFontSize(6.5);
+        doc.setFontSize(PDF_LAYOUT.hiddenHint);
         doc.setTextColor(120, 132, 160);
-        doc.text(`+${hiddenCount} na lista completa`, cellX + 2, cellY + rowHeight - 2.1);
+        doc.text(`+${hiddenCount} na lista`, cellX + 2, cellY + rowHeight - 2.5);
       }
     }
   }
@@ -1730,15 +2138,15 @@ function exportWeekPdf(doc, startY = 42) {
     doc.roundedRect(x, startY, colWidth - 0.3, colHeight, 1.3, 1.3, "FD");
     doc.setFillColor(226, 236, 255);
     doc.roundedRect(x + 0.2, startY + 0.2, colWidth - 0.7, 8, 1.2, 1.2, "F");
-    doc.setFontSize(8);
+    doc.setFontSize(PDF_LAYOUT.weekColumnHead);
     doc.setTextColor(31, 47, 86);
     const head = new Intl.DateTimeFormat("pt-BR", { weekday: "short", day: "2-digit" }).format(date);
-    doc.text(head, x + 1.8, startY + 5.6);
+    doc.text(head, x + 2, startY + 6.2);
 
     const events = getEventsForDate(date).filter(matchesSearch);
-    const eventsToShow = events.slice(0, MONTH_DAY_EVENT_VISIBLE_LIMIT);
-    const maxLineY = startY + colHeight - 2.6;
-    let lineY = startY + 10.6;
+    const eventsToShow = events.slice(0, PDF_LAYOUT.monthEventsPerCell);
+    const maxLineY = startY + colHeight - 3;
+    let lineY = startY + 11.5;
     let drawn = 0;
     eventsToShow.forEach((event) => {
       if (lineY >= maxLineY - 0.4) return;
@@ -1749,52 +2157,54 @@ function exportWeekPdf(doc, startY = 42) {
     });
     const hiddenCount = Math.max(0, events.length - drawn);
     if (hiddenCount > 0) {
-      doc.setFontSize(6.5);
+      doc.setFontSize(PDF_LAYOUT.hiddenHint);
       doc.setTextColor(120, 132, 160);
-      doc.text(`+${hiddenCount} na lista completa`, x + 1.8, startY + colHeight - 2.6);
+      doc.text(`+${hiddenCount} na lista`, x + 2, startY + colHeight - 2.8);
     }
   }
 }
 
 function pdfEventChipLayout(doc, text, maxWidthMm, maxHeightMm) {
-  const minFont = 3.4;
-  const maxFont = 6.8;
-  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.35) {
+  const minFont = PDF_LAYOUT.chipFontMin;
+  const maxFont = PDF_LAYOUT.chipFontMax;
+  const lineFactor = 0.48;
+  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.4) {
     doc.setFontSize(fontSize);
     const lines = doc.splitTextToSize(text, maxWidthMm);
-    const lineH = fontSize * 0.42;
-    const height = lines.length * lineH + 1.1;
+    const lineH = fontSize * lineFactor;
+    const height = lines.length * lineH + 1.4;
     if (height <= maxHeightMm) {
-      return { fontSize, lines, lineH, height };
+      return { fontSize, lines: lines.slice(0, 3), lineH, height };
     }
   }
   doc.setFontSize(minFont);
-  const lines = doc.splitTextToSize(text, maxWidthMm);
-  const lineH = minFont * 0.42;
+  const lines = doc.splitTextToSize(text, maxWidthMm).slice(0, 2);
+  const lineH = minFont * lineFactor;
+  const height = Math.min(maxHeightMm, lines.length * lineH + 1.4);
   return {
     fontSize: minFont,
     lines,
     lineH,
-    height: Math.min(maxHeightMm, lines.length * lineH + 1.1),
+    height,
   };
 }
 
-function drawEventChip(doc, x, y, w, event, maxHeight = 5.5) {
-  const statusColor = STATUS_COLORS[event.status || "pendente"] || "#3b82f6";
+function drawEventChip(doc, x, y, w, event, maxHeight = 7) {
+  const statusColor = STATUS_COLORS[normalizeStatus(event.status, event.color)] || "#3b82f6";
   const { r, g, b } = hexToRgb(statusColor);
   const timeBit = formatEventTimeRange(event).replace(/\s+/g, " ");
   const title = String(event.title || "Sem titulo").trim();
-  const label = `${timeBit} ${title}`.replace(/\s+/g, " ");
-  const layout = pdfEventChipLayout(doc, label, w - 2.2, maxHeight);
+  const label = `${timeBit} — ${title}`.replace(/\s+/g, " ");
+  const layout = pdfEventChipLayout(doc, label, w - 2.4, Math.max(maxHeight, PDF_LAYOUT.chipFontMin * 0.48 + 1.6));
 
   doc.setFillColor(r, g, b);
-  doc.roundedRect(x, y, w, layout.height, 1.1, 1.1, "F");
+  doc.roundedRect(x, y, w, layout.height, 1.2, 1.2, "F");
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(layout.fontSize);
   layout.lines.forEach((line, index) => {
-    doc.text(line, x + 1.1, y + 0.95 + (index + 1) * layout.lineH);
+    doc.text(line, x + 1.2, y + 1.1 + (index + 1) * layout.lineH);
   });
-  return layout.height + 0.15;
+  return layout.height + 0.25;
 }
 
 function drawStatusLegend(doc, startX, y) {
@@ -1808,10 +2218,10 @@ function drawStatusLegend(doc, startX, y) {
   let currentY = y;
   const pageWidth = doc.internal.pageSize.getWidth();
   const maxX = pageWidth - 12;
-  const lineGap = 6.2;
-  doc.setFontSize(8);
+  const lineGap = 7;
+  doc.setFontSize(PDF_LAYOUT.legend);
   items.forEach((item) => {
-    const itemWidth = item.label.length * 1.45 + 12;
+    const itemWidth = item.label.length * 1.65 + 14;
     if (x + itemWidth > maxX) {
       x = startX;
       currentY += lineGap;

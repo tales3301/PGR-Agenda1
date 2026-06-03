@@ -39,6 +39,7 @@ const STATUS_COLORS = {
   concluido: "#22c55e",
   entrega_tecnica_finalizada: "#a855f7",
 };
+const SUPER_ADMIN_USERNAME = "jidean";
 
 app.use(cors());
 app.use(express.json({ limit: "2mb" }));
@@ -188,6 +189,24 @@ function authMiddleware(req, res, next) {
   }
 }
 
+function normalizePersonName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function isSuperAdminUsername(username) {
+  return normalizePersonName(username) === normalizePersonName(SUPER_ADMIN_USERNAME);
+}
+
+function isSuperAdminUser(db, userId, usernameFromToken = "") {
+  const user = db.users.find((item) => item.id === userId);
+  const username = String(user?.username || usernameFromToken || "").trim();
+  return isSuperAdminUsername(username);
+}
+
 function getOwnedAndSharedCalendarIds(db, userId) {
   const user = db.users.find((item) => item.id === userId);
   const userEmail = String(user?.email || "")
@@ -201,6 +220,93 @@ function getOwnedAndSharedCalendarIds(db, userId) {
         (!!userEmail && (cal.sharedWithEmails || []).includes(userEmail)),
     )
     .map((cal) => cal.id);
+}
+
+function hasCalendarAccess(db, userId, calendarId) {
+  return getOwnedAndSharedCalendarIds(db, userId).includes(calendarId);
+}
+
+function isUserResponsibleForEvent(db, userId, event) {
+  const user = db.users.find((item) => item.id === userId);
+  if (!user) return false;
+  const username = normalizePersonName(user.username);
+  const responsible = normalizePersonName(event?.responsible);
+  if (!username || !responsible) return false;
+  if (username === responsible) return true;
+  if (username.length >= 3 && responsible.includes(username)) return true;
+  if (responsible.length >= 3 && username.includes(responsible)) return true;
+  return false;
+}
+
+function canFullEditEvent(db, viewerUserId, viewerUsername, event) {
+  if (isSuperAdminUser(db, viewerUserId, viewerUsername)) return true;
+  return hasCalendarAccess(db, viewerUserId, event.calendarId);
+}
+
+function canEditEventStatus(db, viewerUserId, viewerUsername, event) {
+  if (canFullEditEvent(db, viewerUserId, viewerUsername, event)) return true;
+  return isUserResponsibleForEvent(db, viewerUserId, event);
+}
+
+function getAgendaEventsForUser(db, userId) {
+  const calendar = db.calendars.find((item) => item.ownerId === userId);
+  const calendarIds = calendar ? [calendar.id] : [];
+  const merged = new Map();
+  db.events.forEach((event) => {
+    if (calendarIds.includes(event.calendarId) || isUserResponsibleForEvent(db, userId, event)) {
+      merged.set(event.id, event);
+    }
+  });
+  return Array.from(merged.values());
+}
+
+function getMergedEventsForViewer(db, viewerUserId) {
+  const calendarIds = getOwnedAndSharedCalendarIds(db, viewerUserId);
+  const merged = new Map();
+  db.events.forEach((event) => {
+    if (calendarIds.includes(event.calendarId) || isUserResponsibleForEvent(db, viewerUserId, event)) {
+      merged.set(event.id, event);
+    }
+  });
+  return Array.from(merged.values());
+}
+
+function findEventIndex(db, eventId) {
+  return db.events.findIndex((event) => event.id === eventId);
+}
+
+function getCalendarOwnerInfo(db, calendarId) {
+  const calendar = db.calendars.find((item) => item.id === calendarId);
+  if (!calendar) {
+    return { ownerId: null, ownerUsername: null, calendarName: null };
+  }
+  const owner = db.users.find((item) => item.id === calendar.ownerId);
+  return {
+    ownerId: calendar.ownerId,
+    ownerUsername: String(owner?.username || "").trim() || null,
+    calendarName: String(calendar.name || "").trim() || null,
+  };
+}
+
+function mapEventForResponse(db, event, viewerUserId, viewerUsername) {
+  const status = normalizeStatusWithColor(event.status, event.color);
+  const description = String(event.description || event.reminderMessage || "").trim();
+  const owner = getCalendarOwnerInfo(db, event.calendarId);
+  const canFullEdit = canFullEditEvent(db, viewerUserId, viewerUsername, event);
+  const canEditStatusOnly = !canFullEdit && canEditEventStatus(db, viewerUserId, viewerUsername, event);
+  return {
+    ...event,
+    status,
+    color: STATUS_COLORS[status] || STATUS_COLORS.pendente,
+    description,
+    reminderMessage: description,
+    ownerId: owner.ownerId,
+    ownerUsername: owner.ownerUsername,
+    calendarName: owner.calendarName,
+    isAssignedToMe: isUserResponsibleForEvent(db, viewerUserId, event),
+    canFullEdit,
+    canEditStatusOnly,
+  };
 }
 
 function ensureOwnCalendar(db, userId, fallbackUsername = "Usuário") {
@@ -250,7 +356,12 @@ app.post("/api/auth/register", async (req, res) => {
 
   return res.json({
     token: makeToken(user),
-    user: { id: user.id, username: user.username, calendarId: calendar.id },
+    user: {
+      id: user.id,
+      username: user.username,
+      calendarId: calendar.id,
+      isSuperAdmin: isSuperAdminUsername(user.username),
+    },
   });
 });
 
@@ -327,7 +438,12 @@ app.post("/api/auth/login", async (req, res) => {
   const calendar = db.calendars.find((c) => c.ownerId === user.id);
   return res.json({
     token: makeToken(user),
-    user: { id: user.id, username: user.username, calendarId: calendar?.id || null },
+    user: {
+      id: user.id,
+      username: user.username,
+      calendarId: calendar?.id || null,
+      isSuperAdmin: isSuperAdminUsername(user.username),
+    },
   });
 });
 
@@ -343,12 +459,35 @@ app.get("/api/users", authMiddleware, (req, res) => {
   res.json({ users });
 });
 
+app.get("/api/users/:userId/events", authMiddleware, (req, res) => {
+  const db = readDb();
+  const targetUser = db.users.find((item) => item.id === req.params.userId);
+  if (!targetUser) return res.status(404).json({ message: "Usuario nao encontrado." });
+
+  const viewerIsSuperAdmin = isSuperAdminUser(db, req.user.userId, req.user.username);
+  const viewingOwnAgenda = req.user.userId === targetUser.id;
+  const rawEvents = getAgendaEventsForUser(db, targetUser.id);
+  const events = rawEvents
+    .map((event) => mapEventForResponse(db, event, req.user.userId, req.user.username))
+    .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+
+  res.json({
+    events,
+    owner: {
+      id: targetUser.id,
+      username: String(targetUser.username || "").trim(),
+    },
+    readOnly: !viewingOwnAgenda && !viewerIsSuperAdmin,
+    isSuperAdmin: viewerIsSuperAdmin,
+  });
+});
+
 app.get("/api/events", authMiddleware, (req, res) => {
   const db = readDb();
   const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
+  const rawEvents = getMergedEventsForViewer(db, req.user.userId);
   let changed = false;
-  const events = db.events
-    .filter((event) => calendarIds.includes(event.calendarId))
+  const events = rawEvents
     .map((event) => {
       const status = normalizeStatusWithColor(event.status, event.color);
       const description = String(event.description || event.reminderMessage || "").trim();
@@ -367,18 +506,23 @@ app.get("/api/events", authMiddleware, (req, res) => {
       ) {
         changed = true;
       }
-      return next;
+      return mapEventForResponse(db, next, req.user.userId, req.user.username);
     })
     .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
   if (changed) {
     db.events = db.events.map((event) => {
-      if (!calendarIds.includes(event.calendarId)) return event;
+      const inScope =
+        calendarIds.includes(event.calendarId) || isUserResponsibleForEvent(db, req.user.userId, event);
+      if (!inScope) return event;
       const fixed = events.find((item) => item.id === event.id);
       return fixed || event;
     });
     writeDb(db);
   }
-  res.json({ events });
+  res.json({
+    events,
+    isSuperAdmin: isSuperAdminUser(db, req.user.userId, req.user.username),
+  });
 });
 
 app.post("/api/events", authMiddleware, (req, res) => {
@@ -419,52 +563,78 @@ app.post("/api/events", authMiddleware, (req, res) => {
 
 app.put("/api/events/:id", authMiddleware, (req, res) => {
   const db = readDb();
-  const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
-  const idx = db.events.findIndex((event) => event.id === req.params.id && calendarIds.includes(event.calendarId));
+  const idx = findEventIndex(db, req.params.id);
   if (idx < 0) return res.status(404).json({ message: "Evento nao encontrado." });
 
   const current = db.events[idx];
+  const fullEdit = canFullEditEvent(db, req.user.userId, req.user.username, current);
+  const statusOnly = !fullEdit && canEditEventStatus(db, req.user.userId, req.user.username, current);
+  if (!fullEdit && !statusOnly) {
+    return res.status(403).json({ message: "Sem permissao para alterar este evento." });
+  }
+
   const normalizedStatus = normalizeStatusWithColor(req.body.status, req.body.color);
-  db.events[idx] = {
-    ...db.events[idx],
-    title: req.body.title,
-    cnpj: String(req.body.cnpj || "").trim().slice(0, 18),
-    address: String(req.body.address || "").trim().slice(0, 120),
-    location: String(req.body.location || "").trim().slice(0, 120),
-    contactName: String(req.body.contactName || "").trim().slice(0, 80),
-    contactPhone: String(req.body.contactPhone || "").trim().slice(0, 20),
-    contactEmail: String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 120),
-    responsible: String(req.body.responsible || "").trim().slice(0, 80),
-    date: req.body.date,
-    endDate: req.body.endDate || req.body.date,
-    start: req.body.start,
-    end: req.body.end,
-    color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
-    repeat: req.body.repeat || "none",
-    status: normalizedStatus,
-    reminderMinutes: Number(req.body.reminderMinutes || 0),
-    description: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
-    reminderMessage: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
-    reminderSentAt: null,
-    completedAt: req.body.completedAt || null,
-    completedOnTime:
-      typeof req.body.completedOnTime === "boolean"
-        ? req.body.completedOnTime
-        : req.body.completedOnTime == null
-          ? null
-          : !!req.body.completedOnTime,
-    recurrenceGroupId: current.recurrenceGroupId || uuidv4(),
-  };
+
+  if (statusOnly) {
+    db.events[idx] = {
+      ...current,
+      status: normalizedStatus,
+      color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
+      completedAt: req.body.completedAt !== undefined ? req.body.completedAt : current.completedAt,
+      completedOnTime:
+        typeof req.body.completedOnTime === "boolean"
+          ? req.body.completedOnTime
+          : req.body.completedOnTime == null
+            ? current.completedOnTime ?? null
+            : !!req.body.completedOnTime,
+    };
+  } else {
+    db.events[idx] = {
+      ...current,
+      title: req.body.title,
+      cnpj: String(req.body.cnpj || "").trim().slice(0, 18),
+      address: String(req.body.address || "").trim().slice(0, 120),
+      location: String(req.body.location || "").trim().slice(0, 120),
+      contactName: String(req.body.contactName || "").trim().slice(0, 80),
+      contactPhone: String(req.body.contactPhone || "").trim().slice(0, 20),
+      contactEmail: String(req.body.contactEmail || "").trim().toLowerCase().slice(0, 120),
+      responsible: String(req.body.responsible || "").trim().slice(0, 80),
+      date: req.body.date,
+      endDate: req.body.endDate || req.body.date,
+      start: req.body.start,
+      end: req.body.end,
+      color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
+      repeat: req.body.repeat || "none",
+      status: normalizedStatus,
+      reminderMinutes: Number(req.body.reminderMinutes || 0),
+      description: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
+      reminderMessage: String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180),
+      reminderSentAt: current.reminderSentAt,
+      completedAt: req.body.completedAt || null,
+      completedOnTime:
+        typeof req.body.completedOnTime === "boolean"
+          ? req.body.completedOnTime
+          : req.body.completedOnTime == null
+            ? null
+            : !!req.body.completedOnTime,
+      recurrenceGroupId: current.recurrenceGroupId || uuidv4(),
+    };
+  }
+
   writeDb(db);
-  res.json({ event: db.events[idx] });
+  res.json({
+    event: mapEventForResponse(db, db.events[idx], req.user.userId, req.user.username),
+  });
 });
 
 app.delete("/api/events/:id", authMiddleware, (req, res) => {
   const db = readDb();
-  const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);
-  const before = db.events.length;
-  db.events = db.events.filter((event) => !(event.id === req.params.id && calendarIds.includes(event.calendarId)));
-  if (db.events.length === before) return res.status(404).json({ message: "Evento nao encontrado." });
+  const event = db.events.find((item) => item.id === req.params.id);
+  if (!event) return res.status(404).json({ message: "Evento nao encontrado." });
+  if (!canFullEditEvent(db, req.user.userId, req.user.username, event)) {
+    return res.status(403).json({ message: "Sem permissao para excluir este evento." });
+  }
+  db.events = db.events.filter((item) => item.id !== req.params.id);
   writeDb(db);
   res.json({ ok: true });
 });

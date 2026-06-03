@@ -5,6 +5,7 @@ const PDF_LOGO_SRC = "logo-pgr.png";
 const STATUS_COLORS = {
   pendente: "#3b82f6",
   atrasado: "#ef4444",
+  reagendamento: "#f97316",
   concluido: "#22c55e",
   entrega_tecnica_finalizada: "#a855f7",
 };
@@ -12,21 +13,26 @@ const MONTH_DAY_EVENT_VISIBLE_LIMIT = 20;
 
 /** Tamanhos pensados para impressão legível (pt no jsPDF). */
 const PDF_LAYOUT = {
-  monthEventsPerCell: 3,
-  chipFontMin: 7,
-  chipFontMax: 10,
+  monthEventsPerCell: 2,
+  chipFontMin: 9,
+  chipFontMax: 11,
+  chipLineFactor: 0.52,
   headerTitle: 18,
-  headerSub: 11,
-  weekday: 11,
-  dayNumber: 11,
-  weekColumnHead: 10,
+  headerSub: 12,
+  weekday: 12,
+  dayNumber: 12,
+  dayCountFont: 10,
+  weekColumnHead: 11,
   legend: 10,
-  hiddenHint: 8.5,
-  listPageTitle: 16,
-  listFontPrimary: 12,
-  listFontSecondary: 10.5,
-  listLineGap: 6,
-  listBlockGap: 8,
+  hiddenHint: 9,
+  listPageTitle: 18,
+  listFontDate: 14,
+  listFontPrimary: 13,
+  listFontSecondary: 11.5,
+  listFontNote: 10.5,
+  listLineGap: 7.5,
+  listBlockGap: 11,
+  listMinBlockHeight: 26,
 };
 
 const state = {
@@ -778,8 +784,9 @@ function getEventEditMode(event) {
 function setEventFormEditMode(mode) {
   const readOnly = mode === "readonly";
   const statusOnly = mode === "statusOnly";
+  const assignedFields = new Set(["statusInput", "descriptionInput"]);
   refs.eventForm.querySelectorAll("input, select, textarea").forEach((field) => {
-    if (field.id === "statusInput") {
+    if (assignedFields.has(field.id)) {
       field.disabled = readOnly;
       return;
     }
@@ -788,10 +795,11 @@ function setEventFormEditMode(mode) {
   const submitBtn = refs.eventForm.querySelector('button[type="submit"]');
   if (submitBtn) {
     submitBtn.classList.toggle("hidden", readOnly);
-    submitBtn.textContent = statusOnly ? "Salvar status" : "Salvar";
+    submitBtn.textContent = statusOnly ? "Salvar status e lembrete" : "Salvar";
   }
   refs.saveCompanyFromEventBtn.classList.toggle("hidden", readOnly || statusOnly);
   refs.statusInput.disabled = readOnly;
+  refs.descriptionInput.disabled = readOnly;
 }
 
 function isEventExternallyAssigned(event) {
@@ -806,11 +814,13 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   refs.dialogTitle.textContent = readOnly
     ? "Visualizar evento"
     : statusOnly
-      ? "Atualizar status do agendamento"
+      ? "Atualizar status, lembrete ou excluir"
       : event
         ? "Editar evento"
         : "Novo evento";
-  refs.deleteBtn.classList.toggle("hidden", readOnly || statusOnly || !event || !event?.canFullEdit);
+  const canDeleteEvent =
+    event && (event.canFullEdit || event.canDelete || (statusOnly && event.canEditStatusOnly));
+  refs.deleteBtn.classList.toggle("hidden", readOnly || !event || !canDeleteEvent);
   refs.confirmDoneBtn.classList.toggle(
     "hidden",
     readOnly ||
@@ -910,6 +920,8 @@ async function onSubmitEvent(event) {
           ...current,
           status: selectedStatus,
           color: STATUS_COLORS[selectedStatus] || STATUS_COLORS.pendente,
+          description: descriptionText,
+          reminderMessage: descriptionText,
         }
       : {
           id: state.editingId || crypto.randomUUID(),
@@ -966,6 +978,12 @@ async function onSubmitEvent(event) {
 
 async function onDeleteEvent() {
   if (!state.editingId) return;
+  const current = state.events.find((item) => item.id === state.editingId);
+  if (current && !current.canFullEdit && !current.canDelete) {
+    alert("Sem permissao para excluir este agendamento.");
+    return;
+  }
+  if (!confirm("Excluir este agendamento?")) return;
   try {
     await api(`/events/${state.editingId}`, { method: "DELETE" });
     refs.eventDialog.close();
@@ -1670,6 +1688,7 @@ async function loadEventsFromApi() {
     reminderMessage: getDescriptionText(event),
     canFullEdit: Boolean(event.canFullEdit),
     canEditStatusOnly: Boolean(event.canEditStatusOnly),
+    canDelete: Boolean(event.canDelete),
     isAssignedToMe: Boolean(event.isAssignedToMe),
   }));
 }
@@ -1712,6 +1731,8 @@ function normalizeStatus(status, color = "") {
     .replaceAll(" ", "_");
   const aliases = {
     em_atraso: "atrasado",
+    reagendado: "reagendamento",
+    reagendamento: "reagendamento",
     concluído: "concluido",
     entrega_técnica_finalizada: "entrega_tecnica_finalizada",
   };
@@ -1787,19 +1808,33 @@ async function exportPdf() {
 
   if (hasList) {
     appendPdfFullEventList(doc, occurrences, { isFirstSection: true, subtitle, query });
-    doc.addPage("a4", "landscape");
   }
 
   const logoAsset = await getPdfLogoAsset();
-  const contentStartY = drawPdfCalendarPageHeader(doc, {
-    logoAsset,
-    subtitle,
-    query,
-  });
 
   if (state.currentView === "month") {
-    exportMonthPdf(doc, contentStartY);
+    const monthRowChunks = [
+      [0, 2],
+      [3, 5],
+    ];
+    monthRowChunks.forEach(([rowStart, rowEnd], index) => {
+      doc.addPage("a4", "landscape");
+      const partLabel = `Calendario ${index + 1}/2`;
+      const contentStartY = drawPdfCalendarPageHeader(doc, {
+        logoAsset,
+        subtitle: `${subtitle} | ${partLabel}`,
+        query,
+      });
+      exportMonthPdf(doc, contentStartY, rowStart, rowEnd);
+    });
+  } else if (hasList) {
+    appendPdfWeekDetailPages(doc, occurrences, { subtitle, query });
+    doc.addPage("a4", "landscape");
+    const contentStartY = drawPdfCalendarPageHeader(doc, { logoAsset, subtitle, query });
+    exportWeekPdf(doc, contentStartY);
   } else {
+    doc.addPage("a4", "landscape");
+    const contentStartY = drawPdfCalendarPageHeader(doc, { logoAsset, subtitle, query });
     exportWeekPdf(doc, contentStartY);
   }
 
@@ -1926,6 +1961,7 @@ function pdfStatusLabel(event) {
   const labels = {
     pendente: "Pendente",
     atrasado: "Atrasado",
+    reagendamento: "Reagendado",
     concluido: "Concluido",
     entrega_tecnica_finalizada: "Entrega tecnica finalizada",
   };
@@ -1965,14 +2001,18 @@ function appendPdfListPageHeader(doc, margin, subtitle = "", query = "") {
   doc.rect(0, 0, pageWidth, headerH, "F");
   doc.setTextColor(255, 255, 255);
   doc.setFontSize(PDF_LAYOUT.listPageTitle);
-  doc.text("Lista completa dos agendamentos", margin, 9.5);
+  doc.text("Lista completa dos agendamentos (impressao legivel)", margin, 9.5);
   doc.setFontSize(PDF_LAYOUT.headerSub);
+  let nextY = headerH + 4;
   if (subtitle) {
     doc.text(subtitle, margin, 14.5);
+    doc.setFontSize(10);
+    doc.text("Todos os agendamentos do periodo estao nesta secao (fonte grande).", margin, 19);
+    nextY = 24;
   } else {
-    doc.text("Seção principal para leitura e impressão.", margin, 14.5);
+    doc.text("Secao principal para leitura e impressao.", margin, 14.5);
+    nextY = 20;
   }
-  let nextY = headerH + 6;
   if (query) {
     doc.setTextColor(22, 35, 65);
     doc.setFillColor(233, 240, 255);
@@ -2011,49 +2051,135 @@ function appendPdfFullEventList(doc, occurrences, options = {}) {
     y = appendPdfListPageHeader(doc, margin, subtitle, query);
   };
 
-  occurrences.forEach(({ date, event }) => {
+  let lastDateKey = "";
+  occurrences.forEach(({ date, event }, index) => {
+    const dateKey = toISODate(date);
     const head = dateFmt.format(date);
     const timeRange = formatEventTimeRange(event).replace(/\s+/g, " ");
     const title = String(event.title || "Sem titulo").trim();
     const status = pdfStatusLabel(event);
     const resp = String(event.responsible || "").trim();
     const location = String(event.location || "").trim();
+    const reminder = getDescriptionText(event);
+    const owner = String(event.ownerUsername || "").trim();
     const line1 = `${timeRange}  —  ${title}`;
     const line2Parts = [status];
     if (resp) line2Parts.unshift(`Resp.: ${resp}`);
     if (location) line2Parts.push(`Local: ${location}`);
+    if (owner && event.isAssignedToMe) line2Parts.push(`Agenda: ${owner}`);
     const line2 = line2Parts.join("  |  ");
 
-    doc.setFontSize(PDF_LAYOUT.listFontPrimary);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(31, 47, 86);
-    ensureSpace(12);
-    doc.text(head, margin, y);
-    y += PDF_LAYOUT.listLineGap;
-
-    doc.setFont("helvetica", "normal");
     const wrapped1 = doc.splitTextToSize(line1, maxW);
-    const blockH1 = wrapped1.length * PDF_LAYOUT.listLineGap;
-    ensureSpace(blockH1 + PDF_LAYOUT.listBlockGap);
+    const wrapped2 = doc.splitTextToSize(line2, maxW);
+    const wrapped3 = reminder ? doc.splitTextToSize(`Lembrete: ${reminder}`, maxW) : [];
+    const dateHeaderH = dateKey !== lastDateKey ? PDF_LAYOUT.listLineGap + 2 : 0;
+    const blockH =
+      dateHeaderH +
+      wrapped1.length * PDF_LAYOUT.listLineGap +
+      wrapped2.length * (PDF_LAYOUT.listLineGap - 0.5) +
+      wrapped3.length * (PDF_LAYOUT.listLineGap - 0.5) +
+      PDF_LAYOUT.listBlockGap;
+
+    ensureSpace(Math.max(PDF_LAYOUT.listMinBlockHeight, blockH));
+
+    if (dateKey !== lastDateKey) {
+      if (lastDateKey) y += 3;
+      doc.setFontSize(PDF_LAYOUT.listFontDate);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(17, 35, 72);
+      doc.text(head, margin, y);
+      y += PDF_LAYOUT.listLineGap + 1;
+      lastDateKey = dateKey;
+    }
+
+    doc.setFontSize(PDF_LAYOUT.listFontPrimary);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(31, 47, 86);
     wrapped1.forEach((ln) => {
-      doc.text(ln, margin, y);
+      doc.text(ln, margin + 2, y);
       y += PDF_LAYOUT.listLineGap;
     });
 
     doc.setFontSize(PDF_LAYOUT.listFontSecondary);
     doc.setTextColor(70, 82, 110);
-    const wrapped2 = doc.splitTextToSize(line2, maxW);
-    const blockH2 = wrapped2.length * (PDF_LAYOUT.listLineGap - 0.5);
-    ensureSpace(blockH2 + PDF_LAYOUT.listBlockGap);
     wrapped2.forEach((ln) => {
-      doc.text(ln, margin, y);
+      doc.text(ln, margin + 2, y);
       y += PDF_LAYOUT.listLineGap - 0.5;
     });
+
+    if (wrapped3.length) {
+      doc.setFontSize(PDF_LAYOUT.listFontNote);
+      wrapped3.forEach((ln) => {
+        doc.text(ln, margin + 2, y);
+        y += PDF_LAYOUT.listLineGap - 0.5;
+      });
+    }
+
     y += PDF_LAYOUT.listBlockGap - 2;
+
+    if ((index + 1) % 12 === 0 && index + 1 < occurrences.length) {
+      doc.setFontSize(9);
+      doc.setTextColor(120, 132, 160);
+      ensureSpace(8);
+      doc.text("— continua na proxima pagina —", margin, y);
+      y += 6;
+    }
   });
 }
 
-function exportMonthPdf(doc, startY = 42) {
+function appendPdfWeekDetailPages(doc, occurrences, options = {}) {
+  const { subtitle = "", query = "" } = options;
+  if (!occurrences.length) return;
+
+  const byDay = new Map();
+  occurrences.forEach((item) => {
+    const key = toISODate(item.date);
+    if (!byDay.has(key)) byDay.set(key, []);
+    byDay.get(key).push(item);
+  });
+
+  const dateFmt = new Intl.DateTimeFormat("pt-BR", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+
+  byDay.forEach((dayItems, isoDate) => {
+    doc.addPage("a4", "portrait");
+    const pageWidth = doc.internal.pageSize.getWidth();
+    const margin = 14;
+    let y = appendPdfListPageHeader(
+      doc,
+      margin,
+      `${subtitle} | Semana — ${dateFmt.format(dayItems[0].date)}`,
+      query,
+    );
+
+    dayItems.forEach(({ event }) => {
+      const timeRange = formatEventTimeRange(event).replace(/\s+/g, " ");
+      const title = String(event.title || "Sem titulo").trim();
+      const status = pdfStatusLabel(event);
+      const resp = String(event.responsible || "").trim();
+      const line = `${timeRange} — ${title}`;
+      const meta = [status, resp ? `Resp.: ${resp}` : ""].filter(Boolean).join("  |  ");
+
+      doc.setFontSize(PDF_LAYOUT.listFontPrimary);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(31, 47, 86);
+      doc.text(line, margin, y);
+      y += PDF_LAYOUT.listLineGap;
+
+      doc.setFont("helvetica", "normal");
+      doc.setFontSize(PDF_LAYOUT.listFontSecondary);
+      doc.setTextColor(70, 82, 110);
+      doc.text(meta, margin, y);
+      y += PDF_LAYOUT.listBlockGap;
+    });
+  });
+}
+
+function exportMonthPdf(doc, startY = 42, rowStart = 0, rowEnd = 5) {
   const weekdays = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sab"];
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -2061,9 +2187,9 @@ function exportMonthPdf(doc, startY = 42) {
   const contentWidth = pageWidth - startX * 2;
   const contentHeight = pageHeight - startY - 6;
   const colWidth = contentWidth / 7;
-  const rowHeight = contentHeight / 6;
+  const rowCount = rowEnd - rowStart + 1;
+  const rowHeight = contentHeight / rowCount;
   const monthStart = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth(), 1);
-  const monthEnd = new Date(state.currentDate.getFullYear(), state.currentDate.getMonth() + 1, 0);
   const renderStart = new Date(monthStart);
   renderStart.setDate(renderStart.getDate() - renderStart.getDay());
   const today = new Date();
@@ -2076,10 +2202,11 @@ function exportMonthPdf(doc, startY = 42) {
     doc.text(day, startX + idx * colWidth + 2, startY - 4.5);
   });
 
-  for (let row = 0; row < 6; row += 1) {
+  for (let row = rowStart; row <= rowEnd; row += 1) {
+    const displayRow = row - rowStart;
     for (let col = 0; col < 7; col += 1) {
       const cellX = startX + col * colWidth;
-      const cellY = startY + row * rowHeight;
+      const cellY = startY + displayRow * rowHeight;
       const date = new Date(renderStart);
       date.setDate(renderStart.getDate() + row * 7 + col);
       const isMuted = date.getMonth() !== state.currentDate.getMonth();
@@ -2101,19 +2228,32 @@ function exportMonthPdf(doc, startY = 42) {
 
       const allDayEvents = getEventsForDate(date).filter(matchesSearch);
       const eventsToShow = allDayEvents.slice(0, PDF_LAYOUT.monthEventsPerCell);
-      const maxLineY = cellY + rowHeight - 3;
-      let lineY = cellY + 9.5;
+      const maxLineY = cellY + rowHeight - 4;
+      let lineY = cellY + 10;
+
+      if (allDayEvents.length > PDF_LAYOUT.monthEventsPerCell) {
+        doc.setFontSize(PDF_LAYOUT.dayCountFont);
+        doc.setFont("helvetica", "bold");
+        doc.setTextColor(31, 47, 86);
+        doc.text(`${allDayEvents.length} agend.`, cellX + 2, cellY + rowHeight - 4);
+        doc.setFont("helvetica", "normal");
+        doc.setFontSize(PDF_LAYOUT.hiddenHint);
+        doc.setTextColor(120, 132, 160);
+        doc.text("ver lista", cellX + 2, cellY + rowHeight - 1.5);
+      }
+
       let drawn = 0;
       eventsToShow.forEach((event) => {
-        if (lineY >= maxLineY - 0.4) return;
+        if (lineY >= maxLineY - 1) return;
+        if (allDayEvents.length > PDF_LAYOUT.monthEventsPerCell) return;
         const remaining = eventsToShow.length - drawn;
-        const slotH = Math.max(1.5, (maxLineY - lineY) / remaining);
+        const slotH = Math.max(5, (maxLineY - lineY) / remaining);
         lineY += drawEventChip(doc, cellX + 1.2, lineY, colWidth - 2.8, event, slotH);
         drawn += 1;
       });
 
       const hiddenCount = Math.max(0, allDayEvents.length - drawn);
-      if (hiddenCount > 0) {
+      if (hiddenCount > 0 && allDayEvents.length <= PDF_LAYOUT.monthEventsPerCell) {
         doc.setFontSize(PDF_LAYOUT.hiddenHint);
         doc.setTextColor(120, 132, 160);
         doc.text(`+${hiddenCount} na lista`, cellX + 2, cellY + rowHeight - 2.5);
@@ -2167,20 +2307,20 @@ function exportWeekPdf(doc, startY = 42) {
 function pdfEventChipLayout(doc, text, maxWidthMm, maxHeightMm) {
   const minFont = PDF_LAYOUT.chipFontMin;
   const maxFont = PDF_LAYOUT.chipFontMax;
-  const lineFactor = 0.48;
-  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.4) {
+  const lineFactor = PDF_LAYOUT.chipLineFactor;
+  for (let fontSize = maxFont; fontSize >= minFont; fontSize -= 0.35) {
     doc.setFontSize(fontSize);
     const lines = doc.splitTextToSize(text, maxWidthMm);
     const lineH = fontSize * lineFactor;
-    const height = lines.length * lineH + 1.4;
+    const height = lines.length * lineH + 1.6;
     if (height <= maxHeightMm) {
-      return { fontSize, lines: lines.slice(0, 3), lineH, height };
+      return { fontSize, lines: lines.slice(0, 2), lineH, height };
     }
   }
   doc.setFontSize(minFont);
   const lines = doc.splitTextToSize(text, maxWidthMm).slice(0, 2);
   const lineH = minFont * lineFactor;
-  const height = Math.min(maxHeightMm, lines.length * lineH + 1.4);
+  const height = Math.min(maxHeightMm, lines.length * lineH + 1.6);
   return {
     fontSize: minFont,
     lines,
@@ -2189,13 +2329,13 @@ function pdfEventChipLayout(doc, text, maxWidthMm, maxHeightMm) {
   };
 }
 
-function drawEventChip(doc, x, y, w, event, maxHeight = 7) {
+function drawEventChip(doc, x, y, w, event, maxHeight = 8) {
   const statusColor = STATUS_COLORS[normalizeStatus(event.status, event.color)] || "#3b82f6";
   const { r, g, b } = hexToRgb(statusColor);
   const timeBit = formatEventTimeRange(event).replace(/\s+/g, " ");
   const title = String(event.title || "Sem titulo").trim();
   const label = `${timeBit} — ${title}`.replace(/\s+/g, " ");
-  const layout = pdfEventChipLayout(doc, label, w - 2.4, Math.max(maxHeight, PDF_LAYOUT.chipFontMin * 0.48 + 1.6));
+  const layout = pdfEventChipLayout(doc, label, w - 2.4, Math.max(maxHeight, 7));
 
   doc.setFillColor(r, g, b);
   doc.roundedRect(x, y, w, layout.height, 1.2, 1.2, "F");
@@ -2211,6 +2351,7 @@ function drawStatusLegend(doc, startX, y) {
   const items = [
     { label: "Pendente", color: STATUS_COLORS.pendente },
     { label: "Atrasado", color: STATUS_COLORS.atrasado },
+    { label: "Reagendado", color: STATUS_COLORS.reagendamento },
     { label: "Concluido", color: STATUS_COLORS.concluido },
     { label: "Entrega tecnica finalizada", color: STATUS_COLORS.entrega_tecnica_finalizada },
   ];

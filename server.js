@@ -36,6 +36,7 @@ let persistQueue = Promise.resolve();
 const STATUS_COLORS = {
   pendente: "#3b82f6",
   atrasado: "#ef4444",
+  reagendamento: "#f97316",
   concluido: "#22c55e",
   entrega_tecnica_finalizada: "#a855f7",
 };
@@ -248,6 +249,11 @@ function canEditEventStatus(db, viewerUserId, viewerUsername, event) {
   return isUserResponsibleForEvent(db, viewerUserId, event);
 }
 
+function canDeleteEvent(db, viewerUserId, viewerUsername, event) {
+  if (canFullEditEvent(db, viewerUserId, viewerUsername, event)) return true;
+  return isUserResponsibleForEvent(db, viewerUserId, event);
+}
+
 function getAgendaEventsForUser(db, userId) {
   const calendar = db.calendars.find((item) => item.ownerId === userId);
   const calendarIds = calendar ? [calendar.id] : [];
@@ -294,6 +300,7 @@ function mapEventForResponse(db, event, viewerUserId, viewerUsername) {
   const owner = getCalendarOwnerInfo(db, event.calendarId);
   const canFullEdit = canFullEditEvent(db, viewerUserId, viewerUsername, event);
   const canEditStatusOnly = !canFullEdit && canEditEventStatus(db, viewerUserId, viewerUsername, event);
+  const canDelete = canDeleteEvent(db, viewerUserId, viewerUsername, event);
   return {
     ...event,
     status,
@@ -306,6 +313,7 @@ function mapEventForResponse(db, event, viewerUserId, viewerUsername) {
     isAssignedToMe: isUserResponsibleForEvent(db, viewerUserId, event),
     canFullEdit,
     canEditStatusOnly,
+    canDelete,
   };
 }
 
@@ -576,10 +584,13 @@ app.put("/api/events/:id", authMiddleware, (req, res) => {
   const normalizedStatus = normalizeStatusWithColor(req.body.status, req.body.color);
 
   if (statusOnly) {
+    const description = String(req.body.description || req.body.reminderMessage || "").trim().slice(0, 180);
     db.events[idx] = {
       ...current,
       status: normalizedStatus,
       color: STATUS_COLORS[normalizedStatus] || STATUS_COLORS.pendente,
+      description,
+      reminderMessage: description,
       completedAt: req.body.completedAt !== undefined ? req.body.completedAt : current.completedAt,
       completedOnTime:
         typeof req.body.completedOnTime === "boolean"
@@ -631,7 +642,7 @@ app.delete("/api/events/:id", authMiddleware, (req, res) => {
   const db = readDb();
   const event = db.events.find((item) => item.id === req.params.id);
   if (!event) return res.status(404).json({ message: "Evento nao encontrado." });
-  if (!canFullEditEvent(db, req.user.userId, req.user.username, event)) {
+  if (!canDeleteEvent(db, req.user.userId, req.user.username, event)) {
     return res.status(403).json({ message: "Sem permissao para excluir este evento." });
   }
   db.events = db.events.filter((item) => item.id !== req.params.id);
@@ -808,6 +819,8 @@ function normalizeStatus(value) {
     .replaceAll(" ", "_");
   const aliases = {
     em_atraso: "atrasado",
+    reagendado: "reagendamento",
+    reagendamento: "reagendamento",
     concluído: "concluido",
     entrega_técnica_finalizada: "entrega_tecnica_finalizada",
   };
@@ -815,6 +828,7 @@ function normalizeStatus(value) {
   const allowed = [
     "pendente",
     "atrasado",
+    "reagendamento",
     "concluido",
     "entrega_tecnica_finalizada",
   ];
@@ -877,7 +891,13 @@ function startReminderScheduler(enableInterval = true) {
     const now = new Date();
     let changed = false;
     for (const event of db.events) {
-      if (event.status === "concluido" || event.status === "entrega_tecnica_finalizada") continue;
+      if (
+        event.status === "concluido" ||
+        event.status === "entrega_tecnica_finalizada" ||
+        event.status === "reagendamento"
+      ) {
+        continue;
+      }
       const startAt = new Date(`${event.date}T${event.start}:00`);
       const endDay = String(event.endDate || event.date);
       const endAt = new Date(`${endDay}T${event.end}:00`);

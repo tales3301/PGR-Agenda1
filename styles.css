@@ -406,6 +406,10 @@ textarea {
   background: #d93025 !important;
 }
 
+.event-pill.status-reagendamento {
+  background: #f97316 !important;
+}
+
 .event-pill.status-concluido {
   background: #188038 !important;
 }

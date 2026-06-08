@@ -10,6 +10,7 @@ const STATUS_COLORS = {
   entrega_tecnica_finalizada: "#a855f7",
 };
 const MONTH_DAY_EVENT_VISIBLE_LIMIT = 20;
+const AGENDA_VIEW_ALL = "__all__";
 
 /** Tamanhos pensados para impressão legível (pt no jsPDF). */
 const PDF_LAYOUT = {
@@ -508,8 +509,9 @@ function createEventPill(event) {
   }
   const title = document.createElement("span");
   title.className = "event-title";
-  const ownerHint =
-    isEventExternallyAssigned(event) && event.ownerUsername ? ` · ${event.ownerUsername}` : "";
+  const showOwner =
+    (isGeneralAgendaView() || isEventExternallyAssigned(event)) && event.ownerUsername;
+  const ownerHint = showOwner ? ` · ${event.ownerUsername}` : "";
   title.textContent = `${event.title}${ownerHint}`;
   const time = document.createElement("span");
   time.className = "event-time";
@@ -766,8 +768,17 @@ async function onSaveCompanyFromEvent() {
   }
 }
 
+function isGeneralAgendaView() {
+  return state.viewingUserId === AGENDA_VIEW_ALL;
+}
+
 function isViewingOtherAgenda() {
-  return Boolean(state.viewingUserId && state.user && state.viewingUserId !== state.user.id);
+  return Boolean(
+    state.viewingUserId &&
+      state.user &&
+      state.viewingUserId !== state.user.id &&
+      !isGeneralAgendaView(),
+  );
 }
 
 function canManageOtherAgenda() {
@@ -803,6 +814,9 @@ function setEventFormEditMode(mode) {
 }
 
 function isEventExternallyAssigned(event) {
+  if (isGeneralAgendaView()) {
+    return Boolean(event?.ownerId && event.ownerId !== state.user?.id);
+  }
   return Boolean(event?.isAssignedToMe && !event?.canFullEdit);
 }
 
@@ -1345,6 +1359,10 @@ function populateAgendaViewSelect() {
   ownOpt.value = "";
   ownOpt.textContent = "Minha agenda (+ compartilhadas)";
   sel.appendChild(ownOpt);
+  const allOpt = document.createElement("option");
+  allOpt.value = AGENDA_VIEW_ALL;
+  allOpt.textContent = "Agenda geral (todos os usuarios)";
+  sel.appendChild(allOpt);
   state.users
     .filter((user) => user.id !== state.user?.id)
     .forEach((user) => {
@@ -1353,16 +1371,24 @@ function populateAgendaViewSelect() {
       opt.textContent = `Agenda de ${user.username}`;
       sel.appendChild(opt);
     });
-  const hasPrevious = previous && state.users.some((user) => user.id === previous);
+  const hasPrevious =
+    previous === AGENDA_VIEW_ALL || state.users.some((user) => user.id === previous);
   sel.value = hasPrevious ? previous : "";
-  if (!hasPrevious) state.viewingUserId = null;
+  if (!hasPrevious && previous !== AGENDA_VIEW_ALL) state.viewingUserId = null;
 }
 
 function updateAgendaViewUI() {
   const viewingOther = isViewingOtherAgenda();
+  const general = isGeneralAgendaView();
   const readOnly = viewingOther && !canManageOtherAgenda();
   document.body.classList.toggle("is-readonly-agenda", readOnly);
   if (!refs.agendaViewHint) return;
+  if (general) {
+    refs.agendaViewHint.textContent =
+      "Agenda geral: todos os agendamentos de todos os usuarios. Novos eventos vao para sua agenda.";
+    refs.agendaViewHint.classList.remove("hidden");
+    return;
+  }
   if (!viewingOther) {
     refs.agendaViewHint.classList.add("hidden");
     refs.agendaViewHint.textContent = "";
@@ -1671,7 +1697,12 @@ async function onShareSubmit(event) {
 
 async function loadEventsFromApi() {
   if (!state.token) return;
-  const endpoint = state.viewingUserId ? `/users/${state.viewingUserId}/events` : "/events";
+  let endpoint = "/events";
+  if (state.viewingUserId === AGENDA_VIEW_ALL) {
+    endpoint = "/events/all";
+  } else if (state.viewingUserId) {
+    endpoint = `/users/${state.viewingUserId}/events`;
+  }
   const data = await api(endpoint);
   if (typeof data.isSuperAdmin === "boolean") {
     state.isSuperAdmin = data.isSuperAdmin;
@@ -1782,9 +1813,11 @@ async function exportPdf() {
     state.currentDate,
   );
   const viewLabel = state.currentView === "month" ? "Mensal" : "Semanal";
-  const ownerLabel = isViewingOtherAgenda()
-    ? ` | Agenda de ${state.users.find((u) => u.id === state.viewingUserId)?.username || "usuario"}`
-    : "";
+  const ownerLabel = isGeneralAgendaView()
+    ? " | Agenda geral (todos)"
+    : isViewingOtherAgenda()
+      ? ` | Agenda de ${state.users.find((u) => u.id === state.viewingUserId)?.username || "usuario"}`
+      : "";
   const subtitle = `Visualizacao: ${viewLabel} | Periodo: ${label}${ownerLabel}`;
 
   let rangeStart;

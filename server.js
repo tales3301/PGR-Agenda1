@@ -490,6 +490,45 @@ app.get("/api/users/:userId/events", authMiddleware, (req, res) => {
   });
 });
 
+app.get("/api/events/all", authMiddleware, (req, res) => {
+  const db = readDb();
+  let changed = false;
+  const events = db.events
+    .map((event) => {
+      const status = normalizeStatusWithColor(event.status, event.color);
+      const description = String(event.description || event.reminderMessage || "").trim();
+      const next = {
+        ...event,
+        status,
+        color: STATUS_COLORS[status] || STATUS_COLORS.pendente,
+        description,
+        reminderMessage: description,
+      };
+      if (
+        event.status !== next.status ||
+        event.color !== next.color ||
+        String(event.description || "") !== description ||
+        String(event.reminderMessage || "") !== description
+      ) {
+        changed = true;
+      }
+      return mapEventForResponse(db, next, req.user.userId, req.user.username);
+    })
+    .sort((a, b) => `${a.date}${a.start}`.localeCompare(`${b.date}${b.start}`));
+  if (changed) {
+    db.events = db.events.map((event) => {
+      const fixed = events.find((item) => item.id === event.id);
+      return fixed || event;
+    });
+    writeDb(db);
+  }
+  res.json({
+    events,
+    isGeneralAgenda: true,
+    isSuperAdmin: isSuperAdminUser(db, req.user.userId, req.user.username),
+  });
+});
+
 app.get("/api/events", authMiddleware, (req, res) => {
   const db = readDb();
   const calendarIds = getOwnedAndSharedCalendarIds(db, req.user.userId);

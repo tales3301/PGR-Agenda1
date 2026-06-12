@@ -690,7 +690,7 @@ function populateCompanySelect(selectedId = "") {
   sel.innerHTML = "";
   const defaultOpt = document.createElement("option");
   defaultOpt.value = "";
-  defaultOpt.textContent = "Selecionar empresa (opcional)";
+  defaultOpt.textContent = "Selecionar empresa";
   sel.appendChild(defaultOpt);
   state.companies
     .slice()
@@ -1364,7 +1364,7 @@ function populateAgendaViewSelect() {
   sel.appendChild(ownOpt);
   const allOpt = document.createElement("option");
   allOpt.value = AGENDA_VIEW_ALL;
-  allOpt.textContent = "Agenda geral (todos os usuarios)";
+  allOpt.textContent = "Agenda geral";
   sel.appendChild(allOpt);
   state.users
     .filter((user) => user.id !== state.user?.id)

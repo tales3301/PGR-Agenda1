@@ -960,7 +960,10 @@ async function onSubmitEvent(event) {
           reminderSentAt: null,
         };
 
-  if (editMode !== "statusOnly" && !payload.title) return;
+  if (editMode !== "statusOnly" && !payload.title) {
+    alert("Preencha o campo Organização para salvar o evento.");
+    return;
+  }
   if (payload.endDate < payload.date) {
     alert("A data de fim precisa ser maior ou igual a data de início.");
     return;
@@ -1349,7 +1352,7 @@ function populateAgendaViewSelect() {
   if (!sel) return;
   if (!state.token) {
     sel.disabled = true;
-    sel.innerHTML = '<option value="">Minha agenda (+ compartilhadas)</option>';
+    sel.innerHTML = '<option value="">Minha agenda</option>';
     return;
   }
   sel.disabled = false;
@@ -1357,7 +1360,7 @@ function populateAgendaViewSelect() {
   sel.innerHTML = "";
   const ownOpt = document.createElement("option");
   ownOpt.value = "";
-  ownOpt.textContent = "Minha agenda (+ compartilhadas)";
+  ownOpt.textContent = "Minha agenda";
   sel.appendChild(ownOpt);
   const allOpt = document.createElement("option");
   allOpt.value = AGENDA_VIEW_ALL;

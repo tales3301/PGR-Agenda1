@@ -695,6 +695,17 @@ body.dark .mini-day.active {
   max-height: calc(92vh - 24px);
   overflow-y: auto;
   overscroll-behavior: contain;
+  padding: 1.2rem 1.2rem 0;
+}
+
+#eventForm .dialog-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 0.6rem -1.2rem 0;
+  padding: 0.85rem 1.2rem 1rem;
+  background: var(--surface-elevated);
+  border-top: 1px solid var(--border);
 }
 
 #eventForm input:focus,
@@ -956,11 +967,19 @@ body.dark .event-dialog::backdrop {
     max-height: 95vh;
   }
 
-  #eventForm,
   #authForm,
   #shareForm,
   #companiesForm {
     padding: 1rem 0.9rem 0.9rem;
+  }
+
+  #eventForm {
+    padding: 1rem 0.9rem 0;
+  }
+
+  #eventForm .dialog-actions {
+    margin: 0.6rem -0.9rem 0;
+    padding: 0.85rem 0.9rem 0.9rem;
   }
 
   .dialog-actions {

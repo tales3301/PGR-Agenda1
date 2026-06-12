@@ -629,8 +629,7 @@ body.dark .mini-day.active {
   color: var(--text);
   padding: 0;
   box-shadow: var(--shadow);
-  overflow-x: hidden;
-  overflow-y: auto;
+  overflow: hidden;
 }
 
 .event-dialog::backdrop {
@@ -692,17 +691,37 @@ body.dark .mini-day.active {
 }
 
 #eventForm {
-  max-height: calc(92vh - 24px);
+  display: flex;
+  flex-direction: column;
+  max-height: 92vh;
+  margin: 0;
+  padding: 0;
+  gap: 0;
+  overflow: hidden;
+}
+
+.event-form-body {
+  display: grid;
+  gap: 0.8rem;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 1.2rem 1.2rem 0;
+  padding: 1.2rem 1.2rem 0.5rem;
+}
+
+.event-readonly-hint {
+  margin: -0.2rem 0 0.1rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--primary) 35%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
 }
 
 #eventForm .dialog-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  margin: 0.6rem -1.2rem 0;
+  flex-shrink: 0;
+  margin: 0;
   padding: 0.85rem 1.2rem 1rem;
   background: var(--surface-elevated);
   border-top: 1px solid var(--border);
@@ -973,13 +992,22 @@ body.dark .event-dialog::backdrop {
     padding: 1rem 0.9rem 0.9rem;
   }
 
-  #eventForm {
-    padding: 1rem 0.9rem 0;
+  .event-form-body {
+    padding: 1rem 0.9rem 0.5rem;
   }
 
   #eventForm .dialog-actions {
-    margin: 0.6rem -0.9rem 0;
     padding: 0.85rem 0.9rem 0.9rem;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  #eventForm .dialog-actions .ghost-btn,
+  #eventForm .dialog-actions .danger-btn,
+  #eventForm .dialog-actions .primary-btn {
+    flex: 1 1 calc(50% - 0.25rem);
+    min-width: 7.5rem;
+    width: auto;
   }
 
   .dialog-actions {

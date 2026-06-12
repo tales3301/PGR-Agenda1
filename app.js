@@ -89,6 +89,7 @@ const refs = {
   companyNameSuggestBox: document.getElementById("companyNameSuggestBox"),
   companyCnpjSuggestBox: document.getElementById("companyCnpjSuggestBox"),
   dialogTitle: document.getElementById("dialogTitle"),
+  eventReadonlyHint: document.getElementById("eventReadonlyHint"),
   titleInput: document.getElementById("titleInput"),
   cnpjInput: document.getElementById("cnpjInput"),
   addressInput: document.getElementById("addressInput"),
@@ -811,6 +812,21 @@ function setEventFormEditMode(mode) {
   refs.saveCompanyFromEventBtn.classList.toggle("hidden", readOnly || statusOnly);
   refs.statusInput.disabled = readOnly;
   refs.descriptionInput.disabled = readOnly;
+  if (refs.eventReadonlyHint) {
+    if (readOnly) {
+      refs.eventReadonlyHint.textContent = state.editingId
+        ? "Voce esta apenas visualizando este agendamento. Para editar, selecione Minha agenda ou peça acesso ao responsavel."
+        : "Para criar eventos, selecione Minha agenda em Visualizacao.";
+      refs.eventReadonlyHint.classList.remove("hidden");
+    } else if (statusOnly) {
+      refs.eventReadonlyHint.textContent =
+        "Voce pode atualizar apenas status, lembrete e confirmar realizacao deste agendamento.";
+      refs.eventReadonlyHint.classList.remove("hidden");
+    } else {
+      refs.eventReadonlyHint.textContent = "";
+      refs.eventReadonlyHint.classList.add("hidden");
+    }
+  }
 }
 
 function isEventExternallyAssigned(event) {
@@ -879,6 +895,8 @@ function openEventDialog(event = null, seedDate = null, seedStart = "09:00", see
   hideCompanySuggestBoxes();
   setEventFormEditMode(editMode);
   refs.eventDialog.showModal();
+  const formBody = refs.eventForm.querySelector(".event-form-body");
+  if (formBody) formBody.scrollTop = 0;
 }
 
 function getEventEndDateTime(payload) {

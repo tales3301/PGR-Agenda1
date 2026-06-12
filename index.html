@@ -128,7 +128,9 @@
 
     <dialog id="eventDialog" class="event-dialog">
       <form id="eventForm">
+        <div class="event-form-body">
         <h3 id="dialogTitle">Novo evento</h3>
+        <p id="eventReadonlyHint" class="helper-text event-readonly-hint hidden"></p>
         <label>
           Empresa cadastrada
           <select id="companySelectInput">
@@ -230,6 +232,7 @@
           Lembrete
           <textarea id="descriptionInput" maxlength="180" placeholder=""></textarea>
         </label>
+        </div>
 
         <menu class="dialog-actions">
           <button id="confirmDoneBtn" type="button" class="ghost-btn hidden">Confirmar realizado</button>
